@@ -9,7 +9,7 @@ namespace SleepyCobalt.Tools
 {
 public class NormalTextureProcessor
 {
-    [MenuItem("CobaltTools/一键设置法线贴图",false,30)]
+    [MenuItem("Cobalt/一键设置法线贴图",false,30)]
     private static void BatchSetNormalMapsExact()
     {
         // 查找所有贴图
