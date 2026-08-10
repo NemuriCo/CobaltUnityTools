@@ -1,0 +1,10 @@
+{
+  "name": "com.sleepycobalt.tools",
+  "version": "0.1.0",
+  "displayName": "Cobalt Tools",
+  "description": "A collection of reusable Unity editor tools and utilities by SleepyCobalt.",
+  "unity": "2022.3",
+  "author": {
+    "name": "SleepyCobalt"
+  }
+}
