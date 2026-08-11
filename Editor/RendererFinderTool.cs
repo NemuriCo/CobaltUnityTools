@@ -7,13 +7,13 @@ namespace SleepyCobalt.Tools
 {
 public static class RendererFinderTool
 {
-    [MenuItem("Cobalt/查找Mesh Renderer", false, 10)]
+    [MenuItem("CobaltTools/查找Mesh Renderer", false, 10)]
     private static void FindMeshRenderers()
     {
         SelectObjectsOfType<MeshRenderer>();
     }
 
-    [MenuItem("Cobalt/查找Skinned Mesh Renderer", false, 20)]
+    [MenuItem("CobaltTools/查找Skinned Mesh Renderer", false, 20)]
     private static void FindSkinnedMeshRenderers()
     {
         SelectObjectsOfType<SkinnedMeshRenderer>();

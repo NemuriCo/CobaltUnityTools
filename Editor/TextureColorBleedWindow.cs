@@ -133,7 +133,7 @@ namespace SleepyCobalt.Tools.TextureTools
             3
         };
 
-        [MenuItem("Cobalt/贴图工具", false, 20)]
+        [MenuItem("CobaltTools/贴图工具", false, 20)]
         private static void OpenFromCobaltTools()
         {
             OpenWindow();

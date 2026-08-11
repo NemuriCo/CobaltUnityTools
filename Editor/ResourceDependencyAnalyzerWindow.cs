@@ -38,7 +38,7 @@ namespace SleepyCobalt.Tools.ResourceTools
             "全部扫描"
         };
 
-        [MenuItem("Cobalt/资源依赖分析", false, 21)]
+        [MenuItem("CobaltTools/资源依赖分析", false, 21)]
         private static void Open()
         {
             ResourceDependencyAnalyzerWindow window = GetWindow<ResourceDependencyAnalyzerWindow>();
