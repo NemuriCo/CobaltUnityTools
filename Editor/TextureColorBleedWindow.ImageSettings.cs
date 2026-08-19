@@ -25,7 +25,7 @@ namespace SleepyCobalt.Tools.TextureTools
         [SerializeField] private string newImagePresetName = "新预设";
         [SerializeField] private int selectedImagePresetIndex;
         [SerializeField] private Vector2 imageSettingsScrollPosition;
-        [SerializeField] private Vector2 platformSettingsScrollPosition;
+        [SerializeField] private bool imageSettingsAdvancedFoldout = true;
         [SerializeField] private string loadedImageSettingsSourcePath = string.Empty;
         [SerializeField] private bool migratedToBatchImageSettingsNavigation;
 
@@ -88,11 +88,7 @@ namespace SleepyCobalt.Tools.TextureTools
             EditorGUILayout.Space(6f);
             DrawImagePresetControls();
             EditorGUILayout.Space(8f);
-            DrawCommonImageSettings();
-            EditorGUILayout.Space(8f);
-            DrawMipmapImageSettings();
-            EditorGUILayout.Space(8f);
-            DrawSamplingImageSettings();
+            DrawTextureImporterSettings();
             EditorGUILayout.Space(10f);
             DrawAllPlatformImageSettings();
             EditorGUILayout.Space(10f);
@@ -197,14 +193,6 @@ namespace SleepyCobalt.Tools.TextureTools
             newImagePresetName = EditorGUILayout.TextField("预设名称", newImagePresetName);
             if (GUILayout.Button("保存当前为完整预设"))
                 SaveCurrentImagePreset();
-
-            EditorGUILayout.Space(4f);
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("载入推荐小体积平台方案"))
-                LoadCompactGradientImageSettings();
-            if (GUILayout.Button("载入 UI 图集小体积平台方案"))
-                LoadCompactUiAtlasImageSettings();
-            EditorGUILayout.EndHorizontal();
 
             EditorGUILayout.EndVertical();
         }
@@ -381,77 +369,69 @@ namespace SleepyCobalt.Tools.TextureTools
             SaveImagePresets();
         }
 
-        private void LoadCompactGradientImageSettings()
+        private void DrawTextureImporterSettings()
         {
-            ConfigureCompactPlatformSettings(TextureImporterFormat.ASTC_8x8, true);
-            newImagePresetName = "纯色渐变小体积";
-            loadedLegacyImagePreset = false;
-        }
-
-        private void LoadCompactUiAtlasImageSettings()
-        {
-            ConfigureCompactPlatformSettings(TextureImporterFormat.ASTC_8x8, false);
-            newImagePresetName = "UI图集小体积";
-            loadedLegacyImagePreset = false;
-        }
-
-        private void ConfigureCompactPlatformSettings(TextureImporterFormat androidFormat, bool crunchDefault)
-        {
-            imageDefaultSettings.maxTextureSize = 1024;
-            imageDefaultSettings.resizeAlgorithm = TextureResizeAlgorithm.Mitchell;
-            imageDefaultSettings.format = TextureImporterFormat.Automatic;
-            imageDefaultSettings.compression = crunchDefault
-                ? TextureImporterCompression.CompressedLQ
-                : TextureImporterCompression.Compressed;
-            imageDefaultSettings.useCrunchCompression = crunchDefault;
-            imageDefaultSettings.compressionQuality = 50;
-
-            imageStandaloneSettings.overridden = true;
-            imageStandaloneSettings.maxTextureSize = 1024;
-            imageStandaloneSettings.resizeAlgorithm = TextureResizeAlgorithm.Mitchell;
-            imageStandaloneSettings.format = TextureImporterFormat.Automatic;
-            imageStandaloneSettings.compression = TextureImporterCompression.Compressed;
-            imageStandaloneSettings.useCrunchCompression = false;
-            imageStandaloneSettings.compressionQuality = 50;
-
-            imageAndroidSettings.overridden = true;
-            imageAndroidSettings.maxTextureSize = 1024;
-            imageAndroidSettings.resizeAlgorithm = TextureResizeAlgorithm.Mitchell;
-            imageAndroidSettings.format = androidFormat;
-            imageAndroidSettings.compression = TextureImporterCompression.Compressed;
-            imageAndroidSettings.useCrunchCompression = false;
-            imageAndroidSettings.compressionQuality = 50;
-            imageAndroidSettings.androidEtc2FallbackOverride = 0;
-        }
-
-        private void DrawCommonImageSettings()
-        {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("基础设置", EditorStyles.boldLabel);
-
             imageCommonSettings.textureType = (TextureImporterType)EditorGUILayout.EnumPopup(
-                new GUIContent("Texture Type"),
+                "Texture Type",
                 imageCommonSettings.textureType);
+            imageCommonSettings.textureShape = DrawTextureShapePopup(imageCommonSettings.textureShape);
 
             if (imageCommonSettings.textureType != TextureImporterType.NormalMap)
                 imageCommonSettings.sRGBTexture = EditorGUILayout.Toggle("sRGB (Color Texture)", imageCommonSettings.sRGBTexture);
 
-            imageCommonSettings.alphaSource = (TextureImporterAlphaSource)EditorGUILayout.EnumPopup(
-                "Alpha Source",
-                imageCommonSettings.alphaSource);
+            imageCommonSettings.alphaSource = DrawAlphaSourcePopup(imageCommonSettings.alphaSource);
             if (imageCommonSettings.alphaSource != TextureImporterAlphaSource.None)
                 imageCommonSettings.alphaIsTransparency = EditorGUILayout.Toggle(
                     "Alpha Is Transparency",
                     imageCommonSettings.alphaIsTransparency);
 
-            imageCommonSettings.npotScale = (TextureImporterNPOTScale)EditorGUILayout.EnumPopup(
-                "Non Power of 2",
-                imageCommonSettings.npotScale);
-            imageCommonSettings.readable = EditorGUILayout.Toggle("Read/Write", imageCommonSettings.readable);
-            imageCommonSettings.ignorePngGamma = EditorGUILayout.Toggle("Ignore PNG Gamma", imageCommonSettings.ignorePngGamma);
-
             DrawTextureTypeSpecificSettings();
-            EditorGUILayout.EndVertical();
+
+            imageSettingsAdvancedFoldout = EditorGUILayout.Foldout(
+                imageSettingsAdvancedFoldout,
+                "Advanced",
+                true);
+            if (imageSettingsAdvancedFoldout)
+            {
+                EditorGUI.indentLevel++;
+                DrawAdvancedTextureSettings();
+                EditorGUI.indentLevel--;
+            }
+
+            DrawSamplingImageSettings();
+        }
+
+        private static TextureImporterAlphaSource DrawAlphaSourcePopup(TextureImporterAlphaSource current)
+        {
+            string[] labels = { "None", "Input Texture Alpha", "From Gray Scale" };
+            int[] values =
+            {
+                (int)TextureImporterAlphaSource.None,
+                (int)TextureImporterAlphaSource.FromInput,
+                (int)TextureImporterAlphaSource.FromGrayScale
+            };
+            return (TextureImporterAlphaSource)EditorGUILayout.IntPopup(
+                "Alpha Source",
+                (int)current,
+                labels,
+                values);
+        }
+
+        private static TextureImporterShape DrawTextureShapePopup(TextureImporterShape current)
+        {
+            string[] labels = { "2D", "Cube", "2D Array", "3D" };
+            int[] values =
+            {
+                (int)TextureImporterShape.Texture2D,
+                (int)TextureImporterShape.TextureCube,
+                (int)TextureImporterShape.Texture2DArray,
+                (int)TextureImporterShape.Texture3D
+            };
+            return (TextureImporterShape)EditorGUILayout.IntPopup(
+                "Texture Shape",
+                (int)current,
+                labels,
+                values);
         }
 
         private void DrawTextureTypeSpecificSettings()
@@ -521,27 +501,55 @@ namespace SleepyCobalt.Tools.TextureTools
             }
         }
 
-        private void DrawMipmapImageSettings()
+        private void DrawAdvancedTextureSettings()
         {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("Mipmap", EditorStyles.boldLabel);
+            imageCommonSettings.npotScale = (TextureImporterNPOTScale)EditorGUILayout.IntPopup(
+                "Non-Power of 2",
+                (int)imageCommonSettings.npotScale,
+                new[] { "None", "ToNearest", "ToLarger", "ToSmaller" },
+                new[]
+                {
+                    (int)TextureImporterNPOTScale.None,
+                    (int)TextureImporterNPOTScale.ToNearest,
+                    (int)TextureImporterNPOTScale.ToLarger,
+                    (int)TextureImporterNPOTScale.ToSmaller
+                });
+            imageCommonSettings.readable = EditorGUILayout.Toggle("Read/Write", imageCommonSettings.readable);
+            imageCommonSettings.virtualTextureOnly = EditorGUILayout.Toggle(
+                "Virtual Texture Only",
+                imageCommonSettings.virtualTextureOnly);
+
             imageCommonSettings.mipmapEnabled = EditorGUILayout.Toggle(
-                "Generate Mip Maps",
+                "Generate Mipmaps",
                 imageCommonSettings.mipmapEnabled);
 
-            using (new EditorGUI.DisabledScope(!imageCommonSettings.mipmapEnabled))
+            if (imageCommonSettings.mipmapEnabled)
             {
                 bool useMipmapLimits = !imageCommonSettings.ignoreMipmapLimit;
                 useMipmapLimits = EditorGUILayout.Toggle("Use Mipmap Limits", useMipmapLimits);
                 imageCommonSettings.ignoreMipmapLimit = !useMipmapLimits;
                 if (useMipmapLimits)
-                    imageCommonSettings.mipmapLimitGroupName = EditorGUILayout.TextField(
-                        "Mipmap Limit Group",
-                        imageCommonSettings.mipmapLimitGroupName ?? string.Empty);
+                    DrawMipmapLimitGroupPopup();
 
-                imageCommonSettings.mipmapFilter = (TextureImporterMipFilter)EditorGUILayout.EnumPopup(
+                imageCommonSettings.streamingMipmaps = EditorGUILayout.Toggle(
+                    "Mip Streaming",
+                    imageCommonSettings.streamingMipmaps);
+                if (imageCommonSettings.streamingMipmaps)
+                {
+                    imageCommonSettings.streamingMipmapsPriority = EditorGUILayout.IntSlider(
+                        "Mip Map Priority",
+                        imageCommonSettings.streamingMipmapsPriority,
+                        -128,
+                        127);
+                }
+
+                int mipFilter = EditorGUILayout.Popup(
                     "Mipmap Filtering",
-                    imageCommonSettings.mipmapFilter);
+                    imageCommonSettings.mipmapFilter == TextureImporterMipFilter.KaiserFilter ? 1 : 0,
+                    new[] { "Box", "Kaiser" });
+                imageCommonSettings.mipmapFilter = mipFilter == 1
+                    ? TextureImporterMipFilter.KaiserFilter
+                    : TextureImporterMipFilter.BoxFilter;
                 imageCommonSettings.mipMapsPreserveCoverage = EditorGUILayout.Toggle(
                     "Preserve Coverage",
                     imageCommonSettings.mipMapsPreserveCoverage);
@@ -568,31 +576,44 @@ namespace SleepyCobalt.Tools.TextureTools
                         EditorGUILayout.IntField("Fade End", imageCommonSettings.mipmapFadeDistanceEnd));
                 }
 
-                imageCommonSettings.streamingMipmaps = EditorGUILayout.Toggle(
-                    "Mip Streaming",
-                    imageCommonSettings.streamingMipmaps);
-                if (imageCommonSettings.streamingMipmaps)
-                {
-                    imageCommonSettings.streamingMipmapsPriority = EditorGUILayout.IntSlider(
-                        "Mip Map Priority",
-                        imageCommonSettings.streamingMipmapsPriority,
-                        -128,
-                        127);
-                }
-
-                imageCommonSettings.mipmapBias = EditorGUILayout.FloatField(
-                    "Mip Map Bias",
-                    imageCommonSettings.mipmapBias);
             }
 
-            EditorGUILayout.EndVertical();
+            imageCommonSettings.ignorePngGamma = EditorGUILayout.Toggle(
+                "Ignore PNG Gamma",
+                imageCommonSettings.ignorePngGamma);
+            DrawSwizzleControls();
+        }
+
+        private void DrawMipmapLimitGroupPopup()
+        {
+            string currentGroup = imageCommonSettings.mipmapLimitGroupName ?? string.Empty;
+            string[] labels = string.IsNullOrEmpty(currentGroup)
+                ? new[] { "None (Use Global Mipmap Limit)" }
+                : new[] { "None (Use Global Mipmap Limit)", currentGroup };
+            int selectedIndex = string.IsNullOrEmpty(currentGroup) ? 0 : 1;
+            selectedIndex = EditorGUILayout.Popup("Mipmap Limit Group", selectedIndex, labels);
+            imageCommonSettings.mipmapLimitGroupName = selectedIndex == 0 ? string.Empty : currentGroup;
+        }
+
+        private void DrawSwizzleControls()
+        {
+            Rect row = EditorGUILayout.GetControlRect();
+            Rect controls = EditorGUI.PrefixLabel(row, new GUIContent("Swizzle"));
+            const float gap = 4f;
+            float width = (controls.width - gap * 3f) / 4f;
+
+            Rect field = new Rect(controls.x, controls.y, width, controls.height);
+            imageCommonSettings.swizzleR = (TextureImporterSwizzle)EditorGUI.EnumPopup(field, imageCommonSettings.swizzleR);
+            field.x += width + gap;
+            imageCommonSettings.swizzleG = (TextureImporterSwizzle)EditorGUI.EnumPopup(field, imageCommonSettings.swizzleG);
+            field.x += width + gap;
+            imageCommonSettings.swizzleB = (TextureImporterSwizzle)EditorGUI.EnumPopup(field, imageCommonSettings.swizzleB);
+            field.x += width + gap;
+            imageCommonSettings.swizzleA = (TextureImporterSwizzle)EditorGUI.EnumPopup(field, imageCommonSettings.swizzleA);
         }
 
         private void DrawSamplingImageSettings()
         {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("采样", EditorStyles.boldLabel);
-
             int wrapIndex = 4;
             if (!imageCommonSettings.separateWrapModes)
             {
@@ -631,43 +652,31 @@ namespace SleepyCobalt.Tools.TextureTools
                     16);
             }
 
-            EditorGUILayout.EndVertical();
         }
 
         private void DrawAllPlatformImageSettings()
         {
-            EditorGUILayout.LabelField("平台设置", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox(
-                "Default、PC 和 Android 会在一次批量操作中同时写入。PC 与 Android 关闭 Override 时仍会保存面板参数，但构建时继续继承 Default。",
-                MessageType.None);
-
-            platformSettingsScrollPosition = EditorGUILayout.BeginScrollView(
-                platformSettingsScrollPosition,
-                true,
-                false,
-                GUILayout.MinHeight(330f),
-                GUILayout.MaxHeight(430f));
-            EditorGUILayout.BeginHorizontal(GUILayout.MinWidth(840f));
-            DrawPlatformImageSettingsCard("Default", imageDefaultSettings, PlatformSettingsKind.Default);
-            DrawPlatformImageSettingsCard("PC", imageStandaloneSettings, PlatformSettingsKind.Standalone);
-            DrawPlatformImageSettingsCard("Android", imageAndroidSettings, PlatformSettingsKind.Android);
-            EditorGUILayout.EndHorizontal();
-            EditorGUILayout.EndScrollView();
+            DrawPlatformImageSettingsBlock(imageDefaultSettings, PlatformSettingsKind.Default);
+            EditorGUILayout.Space(7f);
+            DrawPlatformImageSettingsBlock(imageStandaloneSettings, PlatformSettingsKind.Standalone);
+            EditorGUILayout.Space(7f);
+            DrawPlatformImageSettingsBlock(imageAndroidSettings, PlatformSettingsKind.Android);
         }
 
-        private void DrawPlatformImageSettingsCard(
-            string title,
+        private void DrawPlatformImageSettingsBlock(
             TexturePlatformSettingsSnapshot settings,
             PlatformSettingsKind kind)
         {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.Width(270f), GUILayout.ExpandHeight(true));
-            EditorGUILayout.LabelField(title, EditorStyles.boldLabel);
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            DrawPlatformSettingsHeader(kind);
 
             bool isDefault = kind == PlatformSettingsKind.Default;
             if (!isDefault)
             {
                 settings.overridden = EditorGUILayout.Toggle(
-                    kind == PlatformSettingsKind.Android ? "Override For Android" : "Override For PC",
+                    kind == PlatformSettingsKind.Android
+                        ? "Override For Android"
+                        : "Override For Windows, Mac, Linux",
                     settings.overridden);
             }
             else
@@ -686,27 +695,31 @@ namespace SleepyCobalt.Tools.TextureTools
                     "Resize Algorithm",
                     settings.resizeAlgorithm);
                 settings.format = DrawFilteredTextureFormatPopup(settings.format, kind);
-                settings.compression = DrawTextureCompressionPopup(
-                    new GUIContent("Compression"),
-                    settings.compression);
-                settings.useCrunchCompression = EditorGUILayout.Toggle(
-                    "Use Crunch Compression",
-                    settings.useCrunchCompression);
-
-                if (settings.compression != TextureImporterCompression.Uncompressed)
+                if (isDefault || settings.overridden || kind == PlatformSettingsKind.Android)
                 {
-                    settings.compressionQuality = EditorGUILayout.IntSlider(
-                        "Compressor Quality",
-                        settings.compressionQuality,
-                        0,
-                        100);
+                    settings.compression = DrawTextureCompressionPopup(
+                        new GUIContent("Compression"),
+                        settings.compression);
+                }
+
+                if (isDefault || settings.overridden)
+                {
+                    settings.useCrunchCompression = EditorGUILayout.Toggle(
+                        "Use Crunch Compression",
+                        settings.useCrunchCompression);
+                    if (settings.useCrunchCompression &&
+                        settings.compression != TextureImporterCompression.Uncompressed)
+                    {
+                        settings.compressionQuality = EditorGUILayout.IntSlider(
+                            "Compressor Quality",
+                            settings.compressionQuality,
+                            0,
+                            100);
+                    }
                 }
 
                 if (kind == PlatformSettingsKind.Android)
                 {
-                    settings.allowsAlphaSplitting = EditorGUILayout.Toggle(
-                        "Split Alpha Channel",
-                        settings.allowsAlphaSplitting);
                     settings.androidEtc2FallbackOverride = EditorGUILayout.IntPopup(
                         "Override ETC2 fallback",
                         settings.androidEtc2FallbackOverride,
@@ -715,8 +728,33 @@ namespace SleepyCobalt.Tools.TextureTools
                 }
             }
 
-            GUILayout.FlexibleSpace();
             EditorGUILayout.EndVertical();
+        }
+
+        private static void DrawPlatformSettingsHeader(PlatformSettingsKind selectedKind)
+        {
+            GUIContent standalone = EditorGUIUtility.IconContent("BuildSettings.Standalone");
+            standalone.tooltip = "PC, Mac & Linux Standalone";
+            GUIContent android = EditorGUIUtility.IconContent("BuildSettings.Android");
+            android.tooltip = "Android";
+
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.Toggle(
+                selectedKind == PlatformSettingsKind.Default,
+                "Default",
+                EditorStyles.miniButtonLeft,
+                GUILayout.ExpandWidth(true));
+            GUILayout.Toggle(
+                selectedKind == PlatformSettingsKind.Standalone,
+                standalone,
+                EditorStyles.miniButtonMid,
+                GUILayout.ExpandWidth(true));
+            GUILayout.Toggle(
+                selectedKind == PlatformSettingsKind.Android,
+                android,
+                EditorStyles.miniButtonRight,
+                GUILayout.ExpandWidth(true));
+            EditorGUILayout.EndHorizontal();
         }
 
         private TextureImporterFormat DrawFilteredTextureFormatPopup(
@@ -750,7 +788,7 @@ namespace SleepyCobalt.Tools.TextureTools
                 if (!valid && format != current)
                     continue;
 
-                labels.Add(new GUIContent(ObjectNames.NicifyVariableName(format.ToString())));
+                labels.Add(new GUIContent(GetTextureFormatDisplayName(format)));
                 values.Add(intValue);
             }
 
@@ -763,6 +801,33 @@ namespace SleepyCobalt.Tools.TextureTools
                 labels.ToArray(),
                 values.ToArray());
             return (TextureImporterFormat)selected;
+        }
+
+        private static string GetTextureFormatDisplayName(TextureImporterFormat format)
+        {
+            switch (format.ToString())
+            {
+                case "DXT1": return "RGB Compressed DXT1|BC1";
+                case "DXT5": return "RGBA Compressed DXT5|BC3";
+                case "DXT1Crunched": return "RGB Crunched DXT1|BC1";
+                case "DXT5Crunched": return "RGBA Crunched DXT5|BC3";
+                case "BC4": return "R Compressed BC4";
+                case "BC5": return "RG Compressed BC5";
+                case "BC6H": return "RGB HDR Compressed BC6H";
+                case "BC7": return "RGBA Compressed BC7";
+                case "ETC_RGB4": return "RGB Compressed ETC 4 bits";
+                case "ETC_RGB4Crunched": return "RGB Crunched ETC";
+                case "ETC2_RGB4": return "RGB Compressed ETC2 4 bits";
+                case "ETC2_RGBA8": return "RGBA Compressed ETC2 8 bits";
+                case "ETC2_RGBA8Crunched": return "RGBA Crunched ETC2";
+                case "ASTC_4x4": return "RGB(A) Compressed ASTC 4x4 block";
+                case "ASTC_5x5": return "RGB(A) Compressed ASTC 5x5 block";
+                case "ASTC_6x6": return "RGB(A) Compressed ASTC 6x6 block";
+                case "ASTC_8x8": return "RGB(A) Compressed ASTC 8x8 block";
+                case "ASTC_10x10": return "RGB(A) Compressed ASTC 10x10 block";
+                case "ASTC_12x12": return "RGB(A) Compressed ASTC 12x12 block";
+                default: return ObjectNames.NicifyVariableName(format.ToString());
+            }
         }
 
         private void DrawImageSettingsTargets()

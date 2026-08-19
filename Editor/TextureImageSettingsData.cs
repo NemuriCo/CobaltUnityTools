@@ -11,12 +11,18 @@ namespace SleepyCobalt.Tools.TextureTools
     internal sealed class TextureCommonSettingsSnapshot
     {
         public TextureImporterType textureType = TextureImporterType.Default;
+        public TextureImporterShape textureShape = TextureImporterShape.Texture2D;
         public bool sRGBTexture = true;
         public TextureImporterAlphaSource alphaSource = TextureImporterAlphaSource.FromInput;
         public bool alphaIsTransparency;
         public TextureImporterNPOTScale npotScale = TextureImporterNPOTScale.None;
         public bool readable;
+        public bool virtualTextureOnly;
         public bool ignorePngGamma;
+        public TextureImporterSwizzle swizzleR = TextureImporterSwizzle.R;
+        public TextureImporterSwizzle swizzleG = TextureImporterSwizzle.G;
+        public TextureImporterSwizzle swizzleB = TextureImporterSwizzle.B;
+        public TextureImporterSwizzle swizzleA = TextureImporterSwizzle.A;
 
         public SpriteImportMode spriteImportMode = SpriteImportMode.Single;
         public float spritePixelsPerUnit = 100f;
@@ -161,12 +167,18 @@ namespace SleepyCobalt.Tools.TextureTools
             common = new TextureCommonSettingsSnapshot
             {
                 textureType = settings.textureType,
+                textureShape = settings.textureShape,
                 sRGBTexture = settings.sRGBTexture,
                 alphaSource = settings.alphaSource,
                 alphaIsTransparency = settings.alphaIsTransparency,
                 npotScale = settings.npotScale,
                 readable = settings.readable,
+                virtualTextureOnly = settings.vtOnly,
                 ignorePngGamma = settings.ignorePngGamma,
+                swizzleR = settings.swizzleR,
+                swizzleG = settings.swizzleG,
+                swizzleB = settings.swizzleB,
+                swizzleA = settings.swizzleA,
                 spriteImportMode = (SpriteImportMode)settings.spriteMode,
                 spritePixelsPerUnit = settings.spritePixelsPerUnit,
                 spriteMeshType = settings.spriteMeshType,
@@ -221,12 +233,18 @@ namespace SleepyCobalt.Tools.TextureTools
             importer.ReadTextureSettings(settings);
 
             settings.textureType = common.textureType;
+            settings.textureShape = common.textureShape;
             settings.sRGBTexture = common.sRGBTexture;
             settings.alphaSource = common.alphaSource;
             settings.alphaIsTransparency = common.alphaIsTransparency;
             settings.npotScale = common.npotScale;
             settings.readable = common.readable;
+            settings.vtOnly = common.virtualTextureOnly;
             settings.ignorePngGamma = common.ignorePngGamma;
+            settings.swizzleR = common.swizzleR;
+            settings.swizzleG = common.swizzleG;
+            settings.swizzleB = common.swizzleB;
+            settings.swizzleA = common.swizzleA;
             settings.spriteMode = (int)common.spriteImportMode;
             settings.spritePixelsPerUnit = Mathf.Max(1f, common.spritePixelsPerUnit);
             settings.spriteMeshType = common.spriteMeshType;

@@ -80,7 +80,7 @@ namespace SleepyCobalt.Tools.TextureTools
         {
             TextureColorBleedWindow window = GetWindow<TextureColorBleedWindow>();
             window.titleContent = new GUIContent("贴图工具");
-            window.minSize = new Vector2(980f, 600f);
+            window.minSize = new Vector2(650f, 600f);
             window.Show();
             return window;
         }
