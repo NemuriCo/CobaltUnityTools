@@ -150,6 +150,7 @@ namespace SleepyCobalt.Tools.TextureTools
         private TextureCategoryProjectSettings GetTextureCategorySettings()
         {
             TextureCategoryProjectSettings settings = TextureCategoryProjectSettings.instance;
+            settings.LoadBackupIfNecessary();
             if (settings.EnsureIntegrity())
                 settings.SaveSettings();
             return settings;

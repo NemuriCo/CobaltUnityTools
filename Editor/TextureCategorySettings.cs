@@ -44,10 +44,14 @@ namespace SleepyCobalt.Tools.TextureTools
     [FilePath("ProjectSettings/CobaltTextureCategories.asset", FilePathAttribute.Location.ProjectFolder)]
     internal sealed class TextureCategoryProjectSettings : ScriptableSingleton<TextureCategoryProjectSettings>
     {
+        private const string BackupFileExtension = ".json";
+
         [SerializeField] public int version = 1;
         [SerializeField] public List<TextureCategoryRecord> categories = new List<TextureCategoryRecord>();
         [SerializeField] public List<TextureCategorySourceRecord> classificationSources = new List<TextureCategorySourceRecord>();
         [SerializeField] public List<TextureCategorySourceRecord> ignoredSources = new List<TextureCategorySourceRecord>();
+
+        [NonSerialized] private bool hasLoadedBackup;
 
         internal bool EnsureIntegrity()
         {
@@ -168,7 +172,149 @@ namespace SleepyCobalt.Tools.TextureTools
             if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
                 Directory.CreateDirectory(directory);
             Save(true);
+            SaveBackup(filePath);
         }
+
+        internal void LoadBackupIfNecessary()
+        {
+            if (hasLoadedBackup)
+                return;
+
+            hasLoadedBackup = true;
+            if ((categories != null && categories.Count > 0) ||
+                (classificationSources != null && classificationSources.Count > 0) ||
+                (ignoredSources != null && ignoredSources.Count > 0))
+                return;
+
+            string backupPath = GetBackupPath(GetFilePath());
+            if (!File.Exists(backupPath))
+                return;
+
+            try
+            {
+                TextureCategoryBackupData backup = JsonUtility.FromJson<TextureCategoryBackupData>(File.ReadAllText(backupPath));
+                if (backup == null)
+                    return;
+
+                version = backup.version;
+                categories = backup.categories == null
+                    ? new List<TextureCategoryRecord>()
+                    : backup.categories.ConvertAll(CreateCategoryFromBackup);
+                classificationSources = CloneSources(backup.classificationSources);
+                ignoredSources = CloneSources(backup.ignoredSources);
+                EnsureIntegrity();
+                Save(true);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning("贴图分类备份读取失败：" + exception.Message);
+            }
+        }
+
+        private void SaveBackup(string settingsFilePath)
+        {
+            try
+            {
+                TextureCategoryBackupData backup = new TextureCategoryBackupData
+                {
+                    version = version,
+                    categories = categories == null
+                        ? new List<TextureCategoryBackupCategory>()
+                        : categories.ConvertAll(CreateCategoryBackup),
+                    classificationSources = CloneSources(classificationSources),
+                    ignoredSources = CloneSources(ignoredSources)
+                };
+                File.WriteAllText(GetBackupPath(settingsFilePath), JsonUtility.ToJson(backup, true));
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning("贴图分类备份保存失败：" + exception.Message);
+            }
+        }
+
+        private static string GetBackupPath(string settingsFilePath)
+        {
+            return Path.ChangeExtension(settingsFilePath, BackupFileExtension);
+        }
+
+        private static TextureCategoryBackupCategory CreateCategoryBackup(TextureCategoryRecord category)
+        {
+            category = category ?? new TextureCategoryRecord();
+            return new TextureCategoryBackupCategory
+            {
+                id = category.id,
+                name = category.name,
+                expanded = category.expanded,
+                textureImporterPresetGuid = category.textureImporterPreset == null
+                    ? string.Empty
+                    : AssetDatabase.AssetPathToGUID(AssetDatabase.GetAssetPath(category.textureImporterPreset)),
+                sources = CloneSources(category.sources),
+                excludedAssetGuids = category.excludedAssetGuids == null
+                    ? new List<string>()
+                    : new List<string>(category.excludedAssetGuids)
+            };
+        }
+
+        private static TextureCategoryRecord CreateCategoryFromBackup(TextureCategoryBackupCategory backup)
+        {
+            backup = backup ?? new TextureCategoryBackupCategory();
+            return new TextureCategoryRecord
+            {
+                id = backup.id,
+                name = backup.name,
+                expanded = backup.expanded,
+                textureImporterPreset = string.IsNullOrEmpty(backup.textureImporterPresetGuid)
+                    ? null
+                    : AssetDatabase.LoadAssetAtPath<Preset>(
+                        AssetDatabase.GUIDToAssetPath(backup.textureImporterPresetGuid)),
+                sources = CloneSources(backup.sources),
+                excludedAssetGuids = backup.excludedAssetGuids == null
+                    ? new List<string>()
+                    : new List<string>(backup.excludedAssetGuids)
+            };
+        }
+
+        private static List<TextureCategorySourceRecord> CloneSources(List<TextureCategorySourceRecord> sources)
+        {
+            List<TextureCategorySourceRecord> result = new List<TextureCategorySourceRecord>();
+            if (sources == null)
+                return result;
+
+            foreach (TextureCategorySourceRecord source in sources)
+            {
+                if (source == null)
+                    continue;
+
+                result.Add(new TextureCategorySourceRecord
+                {
+                    kind = source.kind,
+                    guid = source.guid,
+                    lastKnownPath = source.lastKnownPath
+                });
+            }
+
+            return result;
+        }
+    }
+
+    [Serializable]
+    internal sealed class TextureCategoryBackupData
+    {
+        public int version;
+        public List<TextureCategoryBackupCategory> categories = new List<TextureCategoryBackupCategory>();
+        public List<TextureCategorySourceRecord> classificationSources = new List<TextureCategorySourceRecord>();
+        public List<TextureCategorySourceRecord> ignoredSources = new List<TextureCategorySourceRecord>();
+    }
+
+    [Serializable]
+    internal sealed class TextureCategoryBackupCategory
+    {
+        public string id;
+        public string name;
+        public bool expanded = true;
+        public string textureImporterPresetGuid;
+        public List<TextureCategorySourceRecord> sources = new List<TextureCategorySourceRecord>();
+        public List<string> excludedAssetGuids = new List<string>();
     }
 
     internal sealed class TextureCategoryResolvedRecord
