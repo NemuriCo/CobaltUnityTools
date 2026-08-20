@@ -210,13 +210,15 @@ namespace SleepyCobalt.Tools.TextureTools
             }
             else
             {
-                DrawUngroupedTextureGrid(visibleUngroupedPaths);
+                DrawUngroupedTextureGrid(settings, visibleUngroupedPaths);
             }
 
             EditorGUILayout.EndVertical();
         }
 
-        private void DrawUngroupedTextureGrid(IList<string> assetPaths)
+        private void DrawUngroupedTextureGrid(
+            TextureCategoryProjectSettings settings,
+            IList<string> assetPaths)
         {
             if (assetPaths == null || assetPaths.Count == 0)
                 return;
@@ -263,9 +265,11 @@ namespace SleepyCobalt.Tools.TextureTools
                 Event currentEvent = Event.current;
                 bool actionKey = currentEvent.control || currentEvent.command;
                 bool shiftKey = currentEvent.shift;
-                if (currentEvent.type == EventType.ContextClick && tileRect.Contains(currentEvent.mousePosition))
+                bool isRightClick = currentEvent.button == 1 &&
+                    (currentEvent.type == EventType.ContextClick || currentEvent.type == EventType.MouseDown);
+                if (isRightClick && tileRect.Contains(currentEvent.mousePosition))
                 {
-                    ShowUngroupedAssetContextMenu(path);
+                    ShowUngroupedAssetContextMenu(settings, path);
                     currentEvent.Use();
                 }
                 if (GUI.Button(tileRect, GUIContent.none, GUIStyle.none))
@@ -376,9 +380,12 @@ namespace SleepyCobalt.Tools.TextureTools
             return paths;
         }
 
-        private static void ShowUngroupedAssetContextMenu(string path)
+        private void ShowUngroupedAssetContextMenu(
+            TextureCategoryProjectSettings settings,
+            string path)
         {
             UnityEngine.Object asset = AssetDatabase.LoadMainAssetAtPath(path);
+            List<string> actionPaths = PrepareUngroupedContextActionPaths(path);
             GenericMenu menu = new GenericMenu();
             if (asset == null)
             {
@@ -387,16 +394,43 @@ namespace SleepyCobalt.Tools.TextureTools
             else
             {
                 menu.AddItem(
+                    new GUIContent("忽略"),
+                    false,
+                    () => AddIgnoredUngroupedTextures(settings, actionPaths));
+                menu.AddItem(
+                    new GUIContent("加入分类"),
+                    false,
+                    () => ShowAddUngroupedTextureMenu(settings, actionPaths));
+                menu.AddSeparator(string.Empty);
+                menu.AddItem(
                     new GUIContent("在 Project 中定位"),
                     false,
-                    () =>
-                    {
-                        Selection.activeObject = asset;
-                        EditorGUIUtility.PingObject(asset);
-                    });
+                    () => PingAssetInProject(asset));
             }
 
             menu.ShowAsContext();
+        }
+
+        private List<string> PrepareUngroupedContextActionPaths(string path)
+        {
+            if (!selectedUngroupedAssetPaths.Contains(path))
+            {
+                selectedUngroupedAssetPaths.Clear();
+                selectedUngroupedAssetPaths.Add(path);
+                lastSelectedUngroupedAssetPath = path;
+                Repaint();
+            }
+
+            return GetSelectedUngroupedAssetPaths(textureCategoryResolution.ungroupedAssetPaths);
+        }
+
+        private static void PingAssetInProject(UnityEngine.Object asset)
+        {
+            if (asset == null)
+                return;
+
+            Selection.activeObject = asset;
+            EditorGUIUtility.PingObject(asset);
         }
 
         private void DrawTextureClassificationScope(TextureCategoryProjectSettings settings)
@@ -1317,6 +1351,13 @@ namespace SleepyCobalt.Tools.TextureTools
                 Event currentEvent = Event.current;
                 bool actionKey = currentEvent.control || currentEvent.command;
                 bool shiftKey = currentEvent.shift;
+                bool isRightClick = currentEvent.button == 1 &&
+                    (currentEvent.type == EventType.ContextClick || currentEvent.type == EventType.MouseDown);
+                if (isRightClick && tileRect.Contains(currentEvent.mousePosition))
+                {
+                    ShowTextureCategoryMemberContextMenu(settings, category, path);
+                    currentEvent.Use();
+                }
                 if (GUI.Button(tileRect, GUIContent.none, GUIStyle.none))
                     SelectTextureCategoryMember(category, resolved, index, actionKey, shiftKey);
 
@@ -1337,6 +1378,54 @@ namespace SleepyCobalt.Tools.TextureTools
             }
 
             return selected;
+        }
+
+        private void ShowTextureCategoryMemberContextMenu(
+            TextureCategoryProjectSettings settings,
+            TextureCategoryRecord category,
+            string path)
+        {
+            UnityEngine.Object asset = AssetDatabase.LoadMainAssetAtPath(path);
+            List<string> actionPaths = PrepareTextureCategoryContextActionPaths(category, path);
+            GenericMenu menu = new GenericMenu();
+            if (asset == null)
+            {
+                menu.AddDisabledItem(new GUIContent("资源已失效"));
+            }
+            else
+            {
+                menu.AddItem(
+                    new GUIContent("移除"),
+                    false,
+                    () => RemoveTextureCategoryMembers(settings, category, actionPaths));
+                menu.AddItem(
+                    new GUIContent("移动到"),
+                    false,
+                    () => ShowMoveTextureCategoryMenu(settings, category, actionPaths));
+                menu.AddSeparator(string.Empty);
+                menu.AddItem(
+                    new GUIContent("在 Project 中定位"),
+                    false,
+                    () => PingAssetInProject(asset));
+            }
+
+            menu.ShowAsContext();
+        }
+
+        private List<string> PrepareTextureCategoryContextActionPaths(
+            TextureCategoryRecord category,
+            string path)
+        {
+            HashSet<string> selectedPaths = GetSelectedTextureCategoryMemberPaths(category);
+            if (!selectedPaths.Contains(path))
+            {
+                selectedPaths.Clear();
+                selectedPaths.Add(path);
+                lastSelectedTextureCategoryMemberPaths[category.id] = path;
+                Repaint();
+            }
+
+            return new List<string>(selectedPaths);
         }
 
         private void PruneSelectedTextureCategoryMemberPaths(
