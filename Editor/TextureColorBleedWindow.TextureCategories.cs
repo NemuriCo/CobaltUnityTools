@@ -13,9 +13,35 @@ namespace SleepyCobalt.Tools.TextureTools
         [SerializeField] private bool showUngroupedTextures = true;
         [SerializeField] private bool showIgnoredTextureRules;
         [SerializeField] private string ungroupedSearchText = string.Empty;
+        private TextureCategoryQuickSearch ungroupedQuickSearch;
+
+        private enum TextureCategoryQuickSearch
+        {
+            None,
+            Sprite,
+            Normal,
+            Transparency,
+            Alpha
+        }
+
+        private sealed class TextureQuickSearchInfo
+        {
+            internal bool isTexture;
+            internal TextureImporterType textureType;
+            internal bool alphaIsTransparency;
+            internal bool hasSourceAlpha;
+        }
 
         private TextureCategoryResolutionSet textureCategoryResolution;
         private bool textureCategoryResolutionDirty = true;
+        private readonly Dictionary<string, string> textureCategoryMemberSearchTexts =
+            new Dictionary<string, string>(StringComparer.Ordinal);
+        private readonly Dictionary<string, TextureCategoryQuickSearch> textureCategoryMemberQuickSearches =
+            new Dictionary<string, TextureCategoryQuickSearch>(StringComparer.Ordinal);
+        private readonly Dictionary<string, HashSet<string>> textureSearchMatchesByQuery =
+            new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, TextureQuickSearchInfo> textureQuickSearchInfoByPath =
+            new Dictionary<string, TextureQuickSearchInfo>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> selectedUngroupedAssetPaths =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, HashSet<string>> selectedTextureCategoryMemberPaths =
@@ -61,6 +87,8 @@ namespace SleepyCobalt.Tools.TextureTools
         private void MarkTextureCategoryResolutionDirty()
         {
             textureCategoryResolutionDirty = true;
+            textureSearchMatchesByQuery.Clear();
+            textureQuickSearchInfoByPath.Clear();
         }
 
         private void DrawTextureCategoriesPage()
@@ -174,6 +202,12 @@ namespace SleepyCobalt.Tools.TextureTools
                 visibleUngroupedPaths = GetFilteredUngroupedAssetPaths();
                 Repaint();
             }
+            if (GUILayout.Button(GetQuickSearchButtonLabel(ungroupedQuickSearch), GUILayout.Width(88f)))
+                ShowQuickSearchMenu(ungroupedQuickSearch, selected =>
+                {
+                    ungroupedQuickSearch = selected;
+                    Repaint();
+                });
             EditorGUILayout.EndHorizontal();
 
             EditorGUILayout.BeginHorizontal();
@@ -366,18 +400,193 @@ namespace SleepyCobalt.Tools.TextureTools
 
         private List<string> GetFilteredUngroupedAssetPaths()
         {
-            string search = (ungroupedSearchText ?? string.Empty).Trim();
-            if (string.IsNullOrEmpty(search))
-                return new List<string>(textureCategoryResolution.ungroupedAssetPaths);
+            return FilterTextureCategoryAssetPaths(
+                textureCategoryResolution.ungroupedAssetPaths,
+                ungroupedSearchText,
+                ungroupedQuickSearch);
+        }
 
-            List<string> paths = new List<string>();
-            foreach (string path in textureCategoryResolution.ungroupedAssetPaths)
+        private List<string> GetFilteredTextureCategoryAssetPaths(
+            TextureCategoryRecord category,
+            IList<string> assetPaths)
+        {
+            string searchText = string.Empty;
+            if (category != null && !string.IsNullOrEmpty(category.id))
+                textureCategoryMemberSearchTexts.TryGetValue(category.id, out searchText);
+
+            TextureCategoryQuickSearch quickSearch = TextureCategoryQuickSearch.None;
+            if (category != null && !string.IsNullOrEmpty(category.id))
+                textureCategoryMemberQuickSearches.TryGetValue(category.id, out quickSearch);
+
+            return FilterTextureCategoryAssetPaths(assetPaths, searchText, quickSearch);
+        }
+
+        private List<string> FilterTextureCategoryAssetPaths(
+            IList<string> assetPaths,
+            string searchText,
+            TextureCategoryQuickSearch quickSearch)
+        {
+            List<string> filteredPaths = new List<string>();
+            if (assetPaths == null)
+                return filteredPaths;
+
+            string search = (searchText ?? string.Empty).Trim();
+            HashSet<string> matchingPaths = string.IsNullOrEmpty(search)
+                ? null
+                : GetTextureSearchMatches(search);
+            foreach (string path in assetPaths)
             {
-                if (path.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0)
-                    paths.Add(path);
+                if (!string.IsNullOrEmpty(path) &&
+                    (matchingPaths == null || matchingPaths.Contains(path)) &&
+                    MatchesTextureQuickSearch(path, quickSearch))
+                {
+                    filteredPaths.Add(path);
+                }
             }
 
-            return paths;
+            return filteredPaths;
+        }
+
+        private HashSet<string> GetTextureSearchMatches(string search)
+        {
+            if (textureSearchMatchesByQuery.TryGetValue(search, out HashSet<string> cachedMatches))
+                return cachedMatches;
+
+            HashSet<string> matches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                string[] guids = AssetDatabase.FindAssets(search, new[] { "Assets" });
+                foreach (string guid in guids)
+                {
+                    string path = NormalizePath(AssetDatabase.GUIDToAssetPath(guid));
+                    if (TextureCategoryResolver.IsAssetsPath(path))
+                        matches.Add(path);
+                }
+            }
+            catch (Exception)
+            {
+                // Invalid search syntax should simply produce no matches.
+            }
+
+            textureSearchMatchesByQuery.Add(search, matches);
+            return matches;
+        }
+
+        private bool MatchesTextureQuickSearch(
+            string path,
+            TextureCategoryQuickSearch quickSearch)
+        {
+            if (quickSearch == TextureCategoryQuickSearch.None)
+                return true;
+
+            string fileName = Path.GetFileNameWithoutExtension(path) ?? string.Empty;
+            bool nameContainsNormal = fileName.IndexOf("Normal", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (quickSearch == TextureCategoryQuickSearch.Normal && nameContainsNormal)
+                return true;
+
+            TextureQuickSearchInfo info = GetTextureQuickSearchInfo(path);
+            if (!info.isTexture)
+                return false;
+
+            switch (quickSearch)
+            {
+                case TextureCategoryQuickSearch.Sprite:
+                    return info.textureType == TextureImporterType.Sprite;
+                case TextureCategoryQuickSearch.Normal:
+                    return info.textureType == TextureImporterType.NormalMap;
+                case TextureCategoryQuickSearch.Transparency:
+                    return info.alphaIsTransparency;
+                case TextureCategoryQuickSearch.Alpha:
+                    return info.hasSourceAlpha && !info.alphaIsTransparency;
+                default:
+                    return true;
+            }
+        }
+
+        private TextureQuickSearchInfo GetTextureQuickSearchInfo(string path)
+        {
+            if (textureQuickSearchInfoByPath.TryGetValue(path, out TextureQuickSearchInfo cachedInfo))
+                return cachedInfo;
+
+            TextureQuickSearchInfo info = new TextureQuickSearchInfo();
+            TextureImporter importer = AssetImporter.GetAtPath(path) as TextureImporter;
+            if (importer != null)
+            {
+                info.isTexture = true;
+                info.textureType = importer.textureType;
+                info.alphaIsTransparency = importer.alphaIsTransparency;
+                try
+                {
+                    info.hasSourceAlpha = importer.DoesSourceTextureHaveAlpha();
+                }
+                catch (Exception)
+                {
+                    info.hasSourceAlpha = false;
+                }
+            }
+
+            textureQuickSearchInfoByPath[path] = info;
+            return info;
+        }
+
+        private static string GetQuickSearchButtonLabel(TextureCategoryQuickSearch quickSearch)
+        {
+            switch (quickSearch)
+            {
+                case TextureCategoryQuickSearch.Sprite:
+                    return "快捷：Sprite";
+                case TextureCategoryQuickSearch.Normal:
+                    return "快捷：Normal";
+                case TextureCategoryQuickSearch.Transparency:
+                    return "快捷：透明";
+                case TextureCategoryQuickSearch.Alpha:
+                    return "快捷：Alpha";
+                default:
+                    return "快捷检索";
+            }
+        }
+
+        private static string GetQuickSearchMenuLabel(TextureCategoryQuickSearch quickSearch)
+        {
+            switch (quickSearch)
+            {
+                case TextureCategoryQuickSearch.Sprite:
+                    return "Sprite（Texture Type = Sprite）";
+                case TextureCategoryQuickSearch.Normal:
+                    return "Normal（类型为 Normal 或名称含 Normal）";
+                case TextureCategoryQuickSearch.Transparency:
+                    return "Transparency（Alpha Is Transparency）";
+                case TextureCategoryQuickSearch.Alpha:
+                    return "Alpha（有 Alpha 且未启用 Alpha Is Transparency）";
+                default:
+                    return "不限快捷条件";
+            }
+        }
+
+        private static void ShowQuickSearchMenu(
+            TextureCategoryQuickSearch currentSearch,
+            Action<TextureCategoryQuickSearch> onSelected)
+        {
+            GenericMenu menu = new GenericMenu();
+            AddQuickSearchMenuItem(menu, TextureCategoryQuickSearch.None, currentSearch, onSelected);
+            menu.AddSeparator(string.Empty);
+            AddQuickSearchMenuItem(menu, TextureCategoryQuickSearch.Sprite, currentSearch, onSelected);
+            AddQuickSearchMenuItem(menu, TextureCategoryQuickSearch.Normal, currentSearch, onSelected);
+            AddQuickSearchMenuItem(menu, TextureCategoryQuickSearch.Transparency, currentSearch, onSelected);
+            AddQuickSearchMenuItem(menu, TextureCategoryQuickSearch.Alpha, currentSearch, onSelected);
+            menu.ShowAsContext();
+        }
+
+        private static void AddQuickSearchMenuItem(
+            GenericMenu menu,
+            TextureCategoryQuickSearch quickSearch,
+            TextureCategoryQuickSearch currentSearch,
+            Action<TextureCategoryQuickSearch> onSelected)
+        {
+            menu.AddItem(
+                new GUIContent(GetQuickSearchMenuLabel(quickSearch)),
+                quickSearch == currentSearch,
+                () => onSelected(quickSearch));
         }
 
         private void ShowUngroupedAssetContextMenu(
@@ -397,10 +606,7 @@ namespace SleepyCobalt.Tools.TextureTools
                     new GUIContent("忽略"),
                     false,
                     () => AddIgnoredUngroupedTextures(settings, actionPaths));
-                menu.AddItem(
-                    new GUIContent("加入分类"),
-                    false,
-                    () => ShowAddUngroupedTextureMenu(settings, actionPaths));
+                AddUngroupedTextureCategoryMenuItems(menu, settings, actionPaths);
                 menu.AddSeparator(string.Empty);
                 menu.AddItem(
                     new GUIContent("在 Project 中定位"),
@@ -409,6 +615,32 @@ namespace SleepyCobalt.Tools.TextureTools
             }
 
             menu.ShowAsContext();
+        }
+
+        private void AddUngroupedTextureCategoryMenuItems(
+            GenericMenu menu,
+            TextureCategoryProjectSettings settings,
+            IList<string> paths)
+        {
+            bool hasCategory = false;
+            if (settings != null && settings.categories != null)
+            {
+                foreach (TextureCategoryRecord category in settings.categories)
+                {
+                    if (category == null || string.IsNullOrWhiteSpace(category.name))
+                        continue;
+
+                    hasCategory = true;
+                    TextureCategoryRecord targetCategory = category;
+                    menu.AddItem(
+                        new GUIContent("加入分类/" + targetCategory.name.Trim()),
+                        false,
+                        () => AddUngroupedTexturesToCategory(settings, targetCategory, paths));
+                }
+            }
+
+            if (!hasCategory)
+                menu.AddDisabledItem(new GUIContent("加入分类/请先新建分类"));
         }
 
         private List<string> PrepareUngroupedContextActionPaths(string path)
@@ -1267,6 +1499,47 @@ namespace SleepyCobalt.Tools.TextureTools
             PruneSelectedTextureCategoryMemberPaths(selectedPaths, resolved);
 
             EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("搜索成员", GUILayout.Width(72f));
+            string currentSearchText;
+            if (category == null ||
+                string.IsNullOrEmpty(category.id) ||
+                !textureCategoryMemberSearchTexts.TryGetValue(category.id, out currentSearchText))
+            {
+                currentSearchText = string.Empty;
+            }
+            string newSearchText = EditorGUILayout.TextField(currentSearchText ?? string.Empty);
+            if (!string.Equals(newSearchText, currentSearchText, StringComparison.Ordinal))
+            {
+                if (category != null && !string.IsNullOrEmpty(category.id))
+                    textureCategoryMemberSearchTexts[category.id] = newSearchText;
+                Repaint();
+            }
+            if (GUILayout.Button("清除", GUILayout.Width(48f)))
+            {
+                if (category != null && !string.IsNullOrEmpty(category.id))
+                    textureCategoryMemberSearchTexts.Remove(category.id);
+                Repaint();
+            }
+            TextureCategoryQuickSearch quickSearch = TextureCategoryQuickSearch.None;
+            if (category != null && !string.IsNullOrEmpty(category.id))
+                textureCategoryMemberQuickSearches.TryGetValue(category.id, out quickSearch);
+            if (GUILayout.Button(GetQuickSearchButtonLabel(quickSearch), GUILayout.Width(88f)))
+            {
+                TextureCategoryRecord targetCategory = category;
+                ShowQuickSearchMenu(quickSearch, selected =>
+                {
+                    if (targetCategory != null && !string.IsNullOrEmpty(targetCategory.id))
+                        textureCategoryMemberQuickSearches[targetCategory.id] = selected;
+                    Repaint();
+                });
+            }
+            EditorGUILayout.EndHorizontal();
+
+            List<string> visibleAssetPaths = GetFilteredTextureCategoryAssetPaths(
+                category,
+                resolved.assetPaths);
+
+            EditorGUILayout.BeginHorizontal();
             EditorGUILayout.LabelField(
                 selectedPaths.Count == 0
                     ? "点击选择成员，Ctrl/Cmd 多选，Shift 连选"
@@ -1275,7 +1548,7 @@ namespace SleepyCobalt.Tools.TextureTools
             if (GUILayout.Button("全选", GUILayout.Width(48f)))
             {
                 selectedPaths.Clear();
-                selectedPaths.UnionWith(resolved.assetPaths);
+                selectedPaths.UnionWith(visibleAssetPaths);
                 Repaint();
             }
             if (GUILayout.Button("清空选择", GUILayout.Width(64f)))
@@ -1304,9 +1577,13 @@ namespace SleepyCobalt.Tools.TextureTools
             }
             EditorGUILayout.EndHorizontal();
 
-            if (resolved.assetPaths.Count == 0)
+            if (visibleAssetPaths.Count == 0)
             {
-                EditorGUILayout.LabelField("没有可显示的成员。", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField(
+                    resolved.assetPaths.Count == 0
+                        ? "没有可显示的成员。"
+                        : "没有匹配当前搜索条件的成员。",
+                    EditorStyles.miniLabel);
                 return;
             }
 
@@ -1314,12 +1591,12 @@ namespace SleepyCobalt.Tools.TextureTools
             const float tileHeight = 112f;
             const float previewSize = 78f;
             int columnCount = Mathf.Max(1, Mathf.FloorToInt((GetTextureCategoryContentWidth() - 12f) / tileWidth));
-            for (int index = 0; index < resolved.assetPaths.Count; index++)
+            for (int index = 0; index < visibleAssetPaths.Count; index++)
             {
                 if (index % columnCount == 0)
                     EditorGUILayout.BeginHorizontal();
 
-                string path = resolved.assetPaths[index];
+                string path = visibleAssetPaths[index];
                 Rect tileRect = GUILayoutUtility.GetRect(
                     tileWidth,
                     tileHeight,
@@ -1359,9 +1636,9 @@ namespace SleepyCobalt.Tools.TextureTools
                     currentEvent.Use();
                 }
                 if (GUI.Button(tileRect, GUIContent.none, GUIStyle.none))
-                    SelectTextureCategoryMember(category, resolved, index, actionKey, shiftKey);
+                    SelectTextureCategoryMember(category, visibleAssetPaths, index, actionKey, shiftKey);
 
-                if (index % columnCount == columnCount - 1 || index == resolved.assetPaths.Count - 1)
+                if (index % columnCount == columnCount - 1 || index == visibleAssetPaths.Count - 1)
                     EditorGUILayout.EndHorizontal();
             }
         }
@@ -1398,10 +1675,7 @@ namespace SleepyCobalt.Tools.TextureTools
                     new GUIContent("移除"),
                     false,
                     () => RemoveTextureCategoryMembers(settings, category, actionPaths));
-                menu.AddItem(
-                    new GUIContent("移动到"),
-                    false,
-                    () => ShowMoveTextureCategoryMenu(settings, category, actionPaths));
+                AddMoveTextureCategoryMenuItems(menu, settings, category, actionPaths);
                 menu.AddSeparator(string.Empty);
                 menu.AddItem(
                     new GUIContent("在 Project 中定位"),
@@ -1410,6 +1684,41 @@ namespace SleepyCobalt.Tools.TextureTools
             }
 
             menu.ShowAsContext();
+        }
+
+        private void AddMoveTextureCategoryMenuItems(
+            GenericMenu menu,
+            TextureCategoryProjectSettings settings,
+            TextureCategoryRecord sourceCategory,
+            IList<string> paths)
+        {
+            bool hasTargetCategory = false;
+            if (settings != null && settings.categories != null)
+            {
+                foreach (TextureCategoryRecord targetCategory in settings.categories)
+                {
+                    if (targetCategory == null ||
+                        targetCategory == sourceCategory ||
+                        string.IsNullOrWhiteSpace(targetCategory.name))
+                    {
+                        continue;
+                    }
+
+                    hasTargetCategory = true;
+                    TextureCategoryRecord capturedTargetCategory = targetCategory;
+                    menu.AddItem(
+                        new GUIContent("移动到/" + capturedTargetCategory.name.Trim()),
+                        false,
+                        () => MoveTextureCategoryMembers(
+                            settings,
+                            sourceCategory,
+                            capturedTargetCategory,
+                            paths));
+                }
+            }
+
+            if (!hasTargetCategory)
+                menu.AddDisabledItem(new GUIContent("移动到/没有其他可用分类"));
         }
 
         private List<string> PrepareTextureCategoryContextActionPaths(
@@ -1440,22 +1749,22 @@ namespace SleepyCobalt.Tools.TextureTools
 
         private void SelectTextureCategoryMember(
             TextureCategoryRecord category,
-            TextureCategoryResolvedRecord resolved,
+            IList<string> assetPaths,
             int index,
             bool actionKey,
             bool shiftKey)
         {
-            if (category == null || index < 0 || index >= resolved.assetPaths.Count)
+            if (category == null || assetPaths == null || index < 0 || index >= assetPaths.Count)
                 return;
 
             HashSet<string> selectedPaths = GetSelectedTextureCategoryMemberPaths(category);
-            string path = resolved.assetPaths[index];
+            string path = assetPaths[index];
             lastSelectedTextureCategoryMemberPaths.TryGetValue(
                 category.id,
                 out string lastSelectedPath);
             if (shiftKey && !string.IsNullOrEmpty(lastSelectedPath))
             {
-                int anchorIndex = resolved.assetPaths.IndexOf(lastSelectedPath);
+                int anchorIndex = assetPaths.IndexOf(lastSelectedPath);
                 if (anchorIndex >= 0)
                 {
                     if (!actionKey)
@@ -1463,7 +1772,7 @@ namespace SleepyCobalt.Tools.TextureTools
                     int start = Mathf.Min(anchorIndex, index);
                     int end = Mathf.Max(anchorIndex, index);
                     for (int rangeIndex = start; rangeIndex <= end; rangeIndex++)
-                        selectedPaths.Add(resolved.assetPaths[rangeIndex]);
+                        selectedPaths.Add(assetPaths[rangeIndex]);
                     lastSelectedTextureCategoryMemberPaths[category.id] = path;
                     Repaint();
                     return;
