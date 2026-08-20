@@ -12,6 +12,7 @@ namespace SleepyCobalt.Tools.TextureTools
         [SerializeField] private Vector2 textureCategoriesScrollPosition;
         [SerializeField] private bool showUngroupedTextures = true;
         [SerializeField] private bool showIgnoredTextureRules;
+        [SerializeField] private string ungroupedSearchText = string.Empty;
 
         private TextureCategoryResolutionSet textureCategoryResolution;
         private bool textureCategoryResolutionDirty = true;
@@ -136,6 +137,7 @@ namespace SleepyCobalt.Tools.TextureTools
         {
             int ungroupedCount = textureCategoryResolution.ungroupedAssetPaths.Count;
             PruneSelectedUngroupedAssets();
+            List<string> visibleUngroupedPaths = GetFilteredUngroupedAssetPaths();
             if (ungroupedCount > 0)
             {
                 EditorGUILayout.HelpBox(
@@ -158,15 +160,33 @@ namespace SleepyCobalt.Tools.TextureTools
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("搜索未分组", GUILayout.Width(72f));
+            string newSearchText = EditorGUILayout.TextField(ungroupedSearchText ?? string.Empty);
+            if (!string.Equals(newSearchText, ungroupedSearchText, StringComparison.Ordinal))
+            {
+                ungroupedSearchText = newSearchText;
+                visibleUngroupedPaths = GetFilteredUngroupedAssetPaths();
+                Repaint();
+            }
+            if (GUILayout.Button("清除", GUILayout.Width(48f)))
+            {
+                ungroupedSearchText = string.Empty;
+                visibleUngroupedPaths = GetFilteredUngroupedAssetPaths();
+                Repaint();
+            }
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.BeginHorizontal();
+            int visibleSelectedCount = CountSelectedUngroupedAssets(visibleUngroupedPaths);
             EditorGUILayout.LabelField(
-                selectedUngroupedAssetPaths.Count == 0
+                visibleSelectedCount == 0
                     ? "点击选择贴图，Ctrl/Cmd 多选，Shift 连选"
-                    : "已选择 " + selectedUngroupedAssetPaths.Count + " 个资源",
+                    : "已选择 " + visibleSelectedCount + " 个资源",
                 EditorStyles.miniLabel);
             if (GUILayout.Button("全选", GUILayout.Width(48f)))
             {
                 selectedUngroupedAssetPaths.Clear();
-                selectedUngroupedAssetPaths.UnionWith(textureCategoryResolution.ungroupedAssetPaths);
+                selectedUngroupedAssetPaths.UnionWith(visibleUngroupedPaths);
                 Repaint();
             }
             if (GUILayout.Button("清空选择", GUILayout.Width(64f)))
@@ -175,16 +195,23 @@ namespace SleepyCobalt.Tools.TextureTools
                 lastSelectedUngroupedAssetPath = null;
                 Repaint();
             }
-            using (new EditorGUI.DisabledScope(selectedUngroupedAssetPaths.Count == 0))
+            using (new EditorGUI.DisabledScope(visibleSelectedCount == 0))
             {
                 if (GUILayout.Button("加入分类…", GUILayout.Width(72f)))
-                    ShowAddUngroupedTextureMenu(settings, GetSelectedUngroupedAssetPaths());
+                    ShowAddUngroupedTextureMenu(settings, GetSelectedUngroupedAssetPaths(visibleUngroupedPaths));
                 if (GUILayout.Button("忽略", GUILayout.Width(48f)))
-                    AddIgnoredUngroupedTextures(settings, GetSelectedUngroupedAssetPaths());
+                    AddIgnoredUngroupedTextures(settings, GetSelectedUngroupedAssetPaths(visibleUngroupedPaths));
             }
             EditorGUILayout.EndHorizontal();
 
-            DrawUngroupedTextureGrid(textureCategoryResolution.ungroupedAssetPaths);
+            if (visibleUngroupedPaths.Count == 0)
+            {
+                EditorGUILayout.HelpBox("没有匹配当前搜索条件的未分组资源。", MessageType.Info);
+            }
+            else
+            {
+                DrawUngroupedTextureGrid(visibleUngroupedPaths);
+            }
 
             EditorGUILayout.EndVertical();
         }
@@ -236,6 +263,11 @@ namespace SleepyCobalt.Tools.TextureTools
                 Event currentEvent = Event.current;
                 bool actionKey = currentEvent.control || currentEvent.command;
                 bool shiftKey = currentEvent.shift;
+                if (currentEvent.type == EventType.ContextClick && tileRect.Contains(currentEvent.mousePosition))
+                {
+                    ShowUngroupedAssetContextMenu(path);
+                    currentEvent.Use();
+                }
                 if (GUI.Button(tileRect, GUIContent.none, GUIStyle.none))
                     SelectUngroupedAsset(assetPaths, index, actionKey, shiftKey);
 
@@ -298,16 +330,73 @@ namespace SleepyCobalt.Tools.TextureTools
                 lastSelectedUngroupedAssetPath = null;
         }
 
-        private List<string> GetSelectedUngroupedAssetPaths()
+        private List<string> GetSelectedUngroupedAssetPaths(IList<string> visiblePaths)
         {
             List<string> paths = new List<string>();
-            foreach (string path in textureCategoryResolution.ungroupedAssetPaths)
+            if (visiblePaths == null)
+                return paths;
+
+            foreach (string path in visiblePaths)
             {
                 if (selectedUngroupedAssetPaths.Contains(path))
                     paths.Add(path);
             }
 
             return paths;
+        }
+
+        private int CountSelectedUngroupedAssets(IList<string> visiblePaths)
+        {
+            if (visiblePaths == null)
+                return 0;
+
+            int count = 0;
+            foreach (string path in visiblePaths)
+            {
+                if (selectedUngroupedAssetPaths.Contains(path))
+                    count++;
+            }
+
+            return count;
+        }
+
+        private List<string> GetFilteredUngroupedAssetPaths()
+        {
+            string search = (ungroupedSearchText ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(search))
+                return new List<string>(textureCategoryResolution.ungroupedAssetPaths);
+
+            List<string> paths = new List<string>();
+            foreach (string path in textureCategoryResolution.ungroupedAssetPaths)
+            {
+                if (path.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0)
+                    paths.Add(path);
+            }
+
+            return paths;
+        }
+
+        private static void ShowUngroupedAssetContextMenu(string path)
+        {
+            UnityEngine.Object asset = AssetDatabase.LoadMainAssetAtPath(path);
+            GenericMenu menu = new GenericMenu();
+            if (asset == null)
+            {
+                menu.AddDisabledItem(new GUIContent("资源已失效"));
+            }
+            else
+            {
+                menu.AddItem(
+                    new GUIContent("在 Project 中定位"),
+                    false,
+                    () =>
+                    {
+                        Selection.activeObject = asset;
+                        EditorGUIUtility.PingObject(asset);
+                    });
+            }
+
+            menu.ShowAsContext();
         }
 
         private void DrawTextureClassificationScope(TextureCategoryProjectSettings settings)
