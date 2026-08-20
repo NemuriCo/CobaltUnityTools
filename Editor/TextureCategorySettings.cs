@@ -1,9 +1,7 @@
 #if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
-using System.IO;
 using UnityEditor;
-using UnityEngine;
 
 namespace SleepyCobalt.Tools.TextureTools
 {
@@ -232,8 +230,6 @@ namespace SleepyCobalt.Tools.TextureTools
         internal readonly List<string> ignoredAssetPaths = new List<string>();
         internal readonly List<string> classificationAssetPaths = new List<string>();
         internal readonly List<string> ungroupedAssetPaths = new List<string>();
-        internal readonly List<string> ungroupedInformativeAlphaAssetPaths = new List<string>();
-        internal readonly List<string> ungroupedNonInformativeAlphaAssetPaths = new List<string>();
         internal readonly List<TextureCategorySourceRecord> missingClassificationSources =
             new List<TextureCategorySourceRecord>();
         internal readonly List<TextureCategorySourceRecord> missingIgnoredSources =
@@ -356,16 +352,9 @@ namespace SleepyCobalt.Tools.TextureTools
                     result.ungroupedTextureCount++;
                 else if (isAtlas)
                     result.ungroupedAtlasCount++;
-
-                if (isTexture && TextureCategoryAlphaAnalyzer.HasInformativeAlpha(path))
-                    result.ungroupedInformativeAlphaAssetPaths.Add(path);
-                else
-                    result.ungroupedNonInformativeAlphaAssetPaths.Add(path);
             }
 
             result.ungroupedAssetPaths.Sort(StringComparer.OrdinalIgnoreCase);
-            result.ungroupedInformativeAlphaAssetPaths.Sort(StringComparer.OrdinalIgnoreCase);
-            result.ungroupedNonInformativeAlphaAssetPaths.Sort(StringComparer.OrdinalIgnoreCase);
 
             return result;
         }
@@ -458,164 +447,5 @@ namespace SleepyCobalt.Tools.TextureTools
         }
     }
 
-    internal static class TextureCategoryAlphaAnalyzer
-    {
-        private sealed class CacheEntry
-        {
-            internal Hash128 dependencyHash;
-            internal bool hasInformativeAlpha;
-        }
-
-        private static readonly Dictionary<string, CacheEntry> cache =
-            new Dictionary<string, CacheEntry>(StringComparer.OrdinalIgnoreCase);
-
-        internal static bool HasInformativeAlpha(string path)
-        {
-            TextureImporter importer = AssetImporter.GetAtPath(path) as TextureImporter;
-            if (importer == null)
-                return false;
-
-            try
-            {
-                if (!importer.DoesSourceTextureHaveAlpha())
-                    return false;
-            }
-            catch (Exception)
-            {
-                return false;
-            }
-
-            Hash128 dependencyHash;
-            try
-            {
-                dependencyHash = AssetDatabase.GetAssetDependencyHash(path);
-            }
-            catch (Exception)
-            {
-                dependencyHash = new Hash128();
-            }
-            if (cache.TryGetValue(path, out CacheEntry cached) && cached.dependencyHash == dependencyHash)
-                return cached.hasInformativeAlpha;
-
-            bool hasInformativeAlpha = AnalyzeTexture(path);
-            cache[path] = new CacheEntry
-            {
-                dependencyHash = dependencyHash,
-                hasInformativeAlpha = hasInformativeAlpha
-            };
-            return hasInformativeAlpha;
-        }
-
-        private static bool AnalyzeTexture(string path)
-        {
-            if (TryAnalyzeSourceFile(path, out bool sourceResult))
-                return sourceResult;
-
-            Texture2D texture = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
-            if (texture == null)
-                return false;
-
-            try
-            {
-                if (texture.isReadable)
-                    return HasNonOpaqueAlpha(texture.GetPixels32());
-            }
-            catch (Exception exception)
-            {
-                Debug.LogWarning("读取贴图 Alpha 通道失败：" + path + "\n" + exception.Message);
-            }
-
-            try
-            {
-                return AnalyzeViaRenderTexture(texture);
-            }
-            catch (Exception exception)
-            {
-                Debug.LogWarning("读取贴图 Alpha 通道失败：" + path + "\n" + exception.Message);
-                return false;
-            }
-        }
-
-        private static bool TryAnalyzeSourceFile(string path, out bool result)
-        {
-            result = false;
-            string extension = Path.GetExtension(path);
-            if (!string.Equals(extension, ".png", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(extension, ".jpg", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(extension, ".jpeg", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            string fullPath = Path.GetFullPath(path);
-            if (!File.Exists(fullPath))
-                return false;
-
-            Texture2D sourceTexture = new Texture2D(2, 2, TextureFormat.RGBA32, false, true);
-            try
-            {
-                byte[] bytes = File.ReadAllBytes(fullPath);
-                if (!ImageConversion.LoadImage(sourceTexture, bytes, false))
-                    return false;
-
-                result = HasNonOpaqueAlpha(sourceTexture.GetPixels32());
-                return true;
-            }
-            catch (Exception exception)
-            {
-                Debug.LogWarning("读取贴图源文件 Alpha 通道失败：" + path + "\n" + exception.Message);
-                return false;
-            }
-            finally
-            {
-                UnityEngine.Object.DestroyImmediate(sourceTexture);
-            }
-        }
-
-        private static bool AnalyzeViaRenderTexture(Texture2D texture)
-        {
-            const int maxDimension = 256;
-            int width = Mathf.Max(1, Mathf.Min(maxDimension, texture.width));
-            int height = Mathf.Max(1, Mathf.Min(maxDimension, texture.height));
-            RenderTexture temporary = RenderTexture.GetTemporary(
-                width,
-                height,
-                0,
-                RenderTextureFormat.ARGB32,
-                RenderTextureReadWrite.Linear);
-            RenderTexture previous = RenderTexture.active;
-            Texture2D readable = null;
-            try
-            {
-                Graphics.Blit(texture, temporary);
-                RenderTexture.active = temporary;
-                readable = new Texture2D(width, height, TextureFormat.RGBA32, false, true);
-                readable.ReadPixels(new Rect(0, 0, width, height), 0, 0, false);
-                readable.Apply(false, false);
-                return HasNonOpaqueAlpha(readable.GetPixels32());
-            }
-            finally
-            {
-                RenderTexture.active = previous;
-                if (readable != null)
-                    UnityEngine.Object.DestroyImmediate(readable);
-                RenderTexture.ReleaseTemporary(temporary);
-            }
-        }
-
-        private static bool HasNonOpaqueAlpha(Color32[] pixels)
-        {
-            if (pixels == null)
-                return false;
-
-            for (int index = 0; index < pixels.Length; index++)
-            {
-                if (pixels[index].a < byte.MaxValue)
-                    return true;
-            }
-
-            return false;
-        }
-    }
 }
 #endif

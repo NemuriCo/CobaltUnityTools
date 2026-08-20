@@ -11,8 +11,6 @@ namespace SleepyCobalt.Tools.TextureTools
     {
         [SerializeField] private Vector2 textureCategoriesScrollPosition;
         [SerializeField] private bool showUngroupedTextures = true;
-        [SerializeField] private bool showUngroupedInformativeAlpha = true;
-        [SerializeField] private bool showUngroupedNonInformativeAlpha = true;
         [SerializeField] private bool showIgnoredTextureRules;
 
         private TextureCategoryResolutionSet textureCategoryResolution;
@@ -186,25 +184,14 @@ namespace SleepyCobalt.Tools.TextureTools
             }
             EditorGUILayout.EndHorizontal();
 
-            DrawUngroupedTextureGroup(
-                "A 通道有信息（" + textureCategoryResolution.ungroupedInformativeAlphaAssetPaths.Count + "）",
-                textureCategoryResolution.ungroupedInformativeAlphaAssetPaths,
-                ref showUngroupedInformativeAlpha);
-            DrawUngroupedTextureGroup(
-                "A 通道无信息/非图片（" + textureCategoryResolution.ungroupedNonInformativeAlphaAssetPaths.Count + "）",
-                textureCategoryResolution.ungroupedNonInformativeAlphaAssetPaths,
-                ref showUngroupedNonInformativeAlpha);
+            DrawUngroupedTextureGrid(textureCategoryResolution.ungroupedAssetPaths);
 
             EditorGUILayout.EndVertical();
         }
 
-        private void DrawUngroupedTextureGroup(
-            string title,
-            IList<string> assetPaths,
-            ref bool expanded)
+        private void DrawUngroupedTextureGrid(IList<string> assetPaths)
         {
-            expanded = EditorGUILayout.Foldout(expanded, title, true, EditorStyles.foldoutHeader);
-            if (!expanded || assetPaths == null || assetPaths.Count == 0)
+            if (assetPaths == null || assetPaths.Count == 0)
                 return;
 
             const float tileWidth = 112f;
