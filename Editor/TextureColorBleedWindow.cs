@@ -66,7 +66,7 @@ namespace SleepyCobalt.Tools.TextureTools
             GUILayout.Label("贴图工具", EditorStyles.boldLabel);
             GUILayout.Space(6f);
 
-            DrawPageButton(ToolPage.TextureCategories, "贴图分类");
+            DrawPageButton(ToolPage.TextureCategories, "贴图分组");
             DrawPageButton(ToolPage.ColorBleed, "颜色溢出");
 
             GUILayout.FlexibleSpace();

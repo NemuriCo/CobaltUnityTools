@@ -105,7 +105,7 @@ namespace SleepyCobalt.Tools.TextureTools
                 textureCategoriesScrollPosition,
                 false,
                 true);
-            EditorGUILayout.LabelField("贴图分类", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("贴图分组", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
                 "创建分类并拖入 Unity 的 TextureImporter Preset 资源。可从 Project 窗口拖入图片或文件夹；" +
                 "文件夹会递归包含以后新增的资源。设置只会在点击应用按钮后写入。",
