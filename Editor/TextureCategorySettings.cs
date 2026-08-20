@@ -89,6 +89,7 @@ namespace SleepyCobalt.Tools.TextureTools
     {
         public int version = 1;
         public List<TextureCategoryRecord> categories = new List<TextureCategoryRecord>();
+        public List<TextureCategorySourceRecord> classificationSources = new List<TextureCategorySourceRecord>();
         public List<TextureCategorySourceRecord> ignoredSources = new List<TextureCategorySourceRecord>();
 
         internal bool EnsureIntegrity()
@@ -102,6 +103,11 @@ namespace SleepyCobalt.Tools.TextureTools
             if (ignoredSources == null)
             {
                 ignoredSources = new List<TextureCategorySourceRecord>();
+                changed = true;
+            }
+            if (classificationSources == null)
+            {
+                classificationSources = new List<TextureCategorySourceRecord>();
                 changed = true;
             }
 
@@ -141,6 +147,25 @@ namespace SleepyCobalt.Tools.TextureTools
                         category.sources.RemoveAt(sourceIndex);
                         changed = true;
                     }
+                }
+            }
+
+            HashSet<string> classificationSourceKeys = new HashSet<string>(StringComparer.Ordinal);
+            for (int sourceIndex = classificationSources.Count - 1; sourceIndex >= 0; sourceIndex--)
+            {
+                TextureCategorySourceRecord source = classificationSources[sourceIndex];
+                if (source == null)
+                {
+                    classificationSources.RemoveAt(sourceIndex);
+                    changed = true;
+                    continue;
+                }
+
+                string sourceKey = source.kind + ":" + (source.guid ?? string.Empty);
+                if (!classificationSourceKeys.Add(sourceKey))
+                {
+                    classificationSources.RemoveAt(sourceIndex);
+                    changed = true;
                 }
             }
 
@@ -188,9 +213,14 @@ namespace SleepyCobalt.Tools.TextureTools
         internal readonly Dictionary<string, TextureCategoryResolvedRecord> byCategoryId =
             new Dictionary<string, TextureCategoryResolvedRecord>(StringComparer.Ordinal);
         internal readonly List<string> ignoredAssetPaths = new List<string>();
+        internal readonly List<string> classificationAssetPaths = new List<string>();
         internal readonly List<string> ungroupedAssetPaths = new List<string>();
+        internal readonly List<TextureCategorySourceRecord> missingClassificationSources =
+            new List<TextureCategorySourceRecord>();
         internal readonly List<TextureCategorySourceRecord> missingIgnoredSources =
             new List<TextureCategorySourceRecord>();
+        internal int classificationTextureCount;
+        internal int classificationAtlasCount;
         internal int ungroupedTextureCount;
         internal int ungroupedAtlasCount;
         internal int conflictAssetCount;
@@ -274,14 +304,27 @@ namespace SleepyCobalt.Tools.TextureTools
             result.ignoredAssetPaths.AddRange(ignoredPaths);
             result.ignoredAssetPaths.Sort(StringComparer.OrdinalIgnoreCase);
 
-            foreach (string guid in AssetDatabase.FindAssets(string.Empty, new[] { "Assets" }))
+            HashSet<string> classificationPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (settings.classificationSources != null)
             {
-                string path = NormalizePath(AssetDatabase.GUIDToAssetPath(guid));
-                if (owners.ContainsKey(path) || ignoredPaths.Contains(path) ||
-                    !TryClassifySupportedAsset(path, out bool isTexture, out bool isAtlas))
-                {
+                foreach (TextureCategorySourceRecord source in settings.classificationSources)
+                    ResolveSource(source, classificationPaths, result.missingClassificationSources);
+            }
+
+            result.classificationAssetPaths.AddRange(classificationPaths);
+            result.classificationAssetPaths.Sort(StringComparer.OrdinalIgnoreCase);
+            foreach (string path in result.classificationAssetPaths)
+            {
+                if (!TryClassifySupportedAsset(path, out bool isTexture, out bool isAtlas))
                     continue;
-                }
+
+                if (isTexture)
+                    result.classificationTextureCount++;
+                else if (isAtlas)
+                    result.classificationAtlasCount++;
+
+                if (owners.ContainsKey(path) || ignoredPaths.Contains(path))
+                    continue;
 
                 result.ungroupedAssetPaths.Add(path);
                 if (isTexture)

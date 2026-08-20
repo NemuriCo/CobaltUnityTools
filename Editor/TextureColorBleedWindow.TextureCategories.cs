@@ -70,6 +70,7 @@ namespace SleepyCobalt.Tools.TextureTools
                 MessageType.Info);
 
             DrawTextureCategoryToolbar(settings);
+            DrawTextureClassificationScope(settings);
             DrawUngroupedTextureSection(settings);
             DrawIgnoredTextureRules(settings);
 
@@ -127,14 +128,14 @@ namespace SleepyCobalt.Tools.TextureTools
             if (ungroupedCount > 0)
             {
                 EditorGUILayout.HelpBox(
-                    "还有 " + textureCategoryResolution.ungroupedTextureCount + " 张图片和 " +
+                    "待分组范围内还有 " + textureCategoryResolution.ungroupedTextureCount + " 张图片和 " +
                     textureCategoryResolution.ungroupedAtlasCount +
                     " 个图集未加入任何分类，也没有被忽略。",
                     MessageType.Warning);
             }
             else
             {
-                EditorGUILayout.HelpBox("当前 Assets 下的图片和图集都已分类或忽略。", MessageType.Info);
+                EditorGUILayout.HelpBox("待分组范围内的图片和图集都已分类或忽略。", MessageType.Info);
             }
 
             showUngroupedTextures = EditorGUILayout.Foldout(
@@ -178,6 +179,150 @@ namespace SleepyCobalt.Tools.TextureTools
             }
 
             EditorGUILayout.EndVertical();
+        }
+
+        private void DrawTextureClassificationScope(TextureCategoryProjectSettings settings)
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("待分组范围", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField(
+                "只检查这里添加的资源：" + textureCategoryResolution.classificationTextureCount +
+                " 张图片，" + textureCategoryResolution.classificationAtlasCount + " 个图集",
+                EditorStyles.miniLabel);
+
+            DrawTextureClassificationDropArea(settings);
+
+            if (settings.classificationSources.Count == 0)
+            {
+                EditorGUILayout.HelpBox(
+                    "请从 Project 窗口拖入需要整理的图片、SpriteAtlas 或文件夹。不会再自动扫描整个项目。",
+                    MessageType.Info);
+            }
+            else
+            {
+                HashSet<TextureCategorySourceRecord> missingSources =
+                    new HashSet<TextureCategorySourceRecord>(textureCategoryResolution.missingClassificationSources);
+                for (int index = 0; index < settings.classificationSources.Count; index++)
+                {
+                    TextureCategorySourceRecord source = settings.classificationSources[index];
+                    string currentPath = source == null
+                        ? string.Empty
+                        : NormalizePath(AssetDatabase.GUIDToAssetPath(source.guid));
+
+                    EditorGUILayout.BeginHorizontal();
+                    GUILayout.Label(
+                        source != null && source.kind == TextureCategorySourceKind.Folder ? "文件夹" : "资源",
+                        GUILayout.Width(44f));
+                    if (!string.IsNullOrEmpty(currentPath))
+                    {
+                        using (new EditorGUI.DisabledScope(true))
+                        {
+                            EditorGUILayout.ObjectField(
+                                AssetDatabase.LoadMainAssetAtPath(currentPath),
+                                typeof(UnityEngine.Object),
+                                false);
+                        }
+                    }
+                    else
+                    {
+                        EditorGUILayout.LabelField(
+                            (source == null ? "未知来源" : source.lastKnownPath) + "（失效）",
+                            EditorStyles.miniLabel);
+                    }
+
+                    if (GUILayout.Button("移除", GUILayout.Width(48f)))
+                    {
+                        settings.classificationSources.RemoveAt(index);
+                        settings.SaveSettings();
+                        MarkTextureCategoryResolutionDirty();
+                        EditorGUILayout.EndHorizontal();
+                        break;
+                    }
+
+                    EditorGUILayout.EndHorizontal();
+                    if (source != null && missingSources.Contains(source) && !string.IsNullOrEmpty(currentPath))
+                        EditorGUILayout.LabelField("    当前资源类型不受支持。", EditorStyles.miniLabel);
+                }
+            }
+
+            if (textureCategoryResolution.missingClassificationSources.Count > 0)
+            {
+                EditorGUILayout.HelpBox(
+                    "有 " + textureCategoryResolution.missingClassificationSources.Count +
+                    " 个待分组来源已失效，可以从列表中移除后重新拖入。",
+                    MessageType.Warning);
+            }
+
+            EditorGUILayout.EndVertical();
+            EditorGUILayout.Space(6f);
+        }
+
+        private void DrawTextureClassificationDropArea(TextureCategoryProjectSettings settings)
+        {
+            Rect dropArea = GUILayoutUtility.GetRect(0f, 48f, GUILayout.ExpandWidth(true));
+            GUI.Box(dropArea, "拖入需要分组的图片、SpriteAtlas 或文件夹", EditorStyles.helpBox);
+
+            Event currentEvent = Event.current;
+            if (!dropArea.Contains(currentEvent.mousePosition) ||
+                (currentEvent.type != EventType.DragUpdated && currentEvent.type != EventType.DragPerform))
+            {
+                return;
+            }
+
+            List<string> draggedPaths = GetDraggedProjectPaths();
+            bool hasValidSource = false;
+            foreach (string path in draggedPaths)
+            {
+                if (TryCreateTextureCategorySource(path, out _, out _))
+                {
+                    hasValidSource = true;
+                    break;
+                }
+            }
+
+            DragAndDrop.visualMode = hasValidSource ? DragAndDropVisualMode.Copy : DragAndDropVisualMode.Rejected;
+            if (currentEvent.type == EventType.DragUpdated)
+            {
+                currentEvent.Use();
+                return;
+            }
+
+            DragAndDrop.AcceptDrag();
+            bool changed = false;
+            List<string> rejected = new List<string>();
+            foreach (string path in draggedPaths)
+            {
+                if (!TryCreateTextureCategorySource(path, out TextureCategorySourceRecord source, out string reason))
+                {
+                    rejected.Add(path + "：" + reason);
+                    continue;
+                }
+
+                bool duplicate = settings.classificationSources.Exists(item =>
+                    item != null && item.kind == source.kind && item.guid == source.guid);
+                if (duplicate)
+                    continue;
+
+                settings.classificationSources.Add(source);
+                changed = true;
+            }
+
+            if (changed)
+            {
+                settings.SaveSettings();
+                MarkTextureCategoryResolutionDirty();
+            }
+
+            if (rejected.Count > 0)
+            {
+                int displayCount = Mathf.Min(5, rejected.Count);
+                EditorUtility.DisplayDialog(
+                    "部分资源未加入待分组范围",
+                    string.Join("\n", rejected.GetRange(0, displayCount).ToArray()),
+                    "确定");
+            }
+
+            currentEvent.Use();
         }
 
         private void DrawIgnoredTextureRules(TextureCategoryProjectSettings settings)
