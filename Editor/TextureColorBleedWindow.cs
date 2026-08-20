@@ -11,8 +11,9 @@ namespace SleepyCobalt.Tools.TextureTools
     {
         private enum ToolPage
         {
-            BatchImageSettings,
-            ColorBleed
+            BatchImageSettings = 0,
+            ColorBleed = 1,
+            TextureCategories = 2
         }
 
         private enum OutputMode
@@ -101,6 +102,7 @@ namespace SleepyCobalt.Tools.TextureTools
             GUILayout.Space(6f);
 
             DrawPageButton(ToolPage.BatchImageSettings, "批量图像设置");
+            DrawPageButton(ToolPage.TextureCategories, "贴图分类");
             DrawPageButton(ToolPage.ColorBleed, "颜色溢出");
 
             GUILayout.FlexibleSpace();
@@ -134,6 +136,9 @@ namespace SleepyCobalt.Tools.TextureTools
                     break;
                 case ToolPage.ColorBleed:
                     DrawColorBleedPage();
+                    break;
+                case ToolPage.TextureCategories:
+                    DrawTextureCategoriesPage();
                     break;
             }
 

@@ -59,6 +59,7 @@ namespace SleepyCobalt.Tools.TextureTools
             }
 
             EnsureImageSettingsObjects();
+            InitializeTextureCategoryPage();
         }
 
         private void EnsureImageSettingsObjects()
@@ -213,6 +214,19 @@ namespace SleepyCobalt.Tools.TextureTools
 
             if (string.IsNullOrEmpty(json))
                 MigrateLegacyImagePresets();
+
+            bool assignedPresetIds = false;
+            foreach (TextureImagePresetRecord preset in imagePresetCollection.presets)
+            {
+                if (preset == null || !string.IsNullOrEmpty(preset.id))
+                    continue;
+
+                preset.id = Guid.NewGuid().ToString("N");
+                assignedPresetIds = true;
+            }
+
+            if (assignedPresetIds)
+                SaveImagePresets();
         }
 
         private void MigrateLegacyImagePresets()
@@ -233,6 +247,7 @@ namespace SleepyCobalt.Tools.TextureTools
 
                 imagePresetCollection.presets.Add(new TextureImagePresetRecord
                 {
+                    id = Guid.NewGuid().ToString("N"),
                     name = legacyRecord.name,
                     hasCommonSettings = false,
                     commonSettings = null,
@@ -295,12 +310,20 @@ namespace SleepyCobalt.Tools.TextureTools
 
             if (record == null)
             {
-                record = new TextureImagePresetRecord { name = presetName };
+                record = new TextureImagePresetRecord
+                {
+                    id = Guid.NewGuid().ToString("N"),
+                    name = presetName
+                };
                 imagePresetCollection.presets.Add(record);
                 selectedImagePresetIndex = imagePresetCollection.presets.Count - 1;
             }
 
+            if (string.IsNullOrEmpty(record.id))
+                record.id = Guid.NewGuid().ToString("N");
+
             record.name = presetName;
+            record.revision++;
             record.hasCommonSettings = true;
             record.commonSettings = imageCommonSettings.Clone();
             record.defaultSettings = imageDefaultSettings.Clone();
@@ -309,6 +332,7 @@ namespace SleepyCobalt.Tools.TextureTools
             loadedLegacyImagePreset = false;
 
             SaveImagePresets();
+            SyncTextureCategoriesForPreset(record);
             EditorUtility.DisplayDialog("保存预设", "已保存完整预设“" + presetName + "”。", "确定");
         }
 

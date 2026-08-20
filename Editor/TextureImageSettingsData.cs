@@ -87,7 +87,9 @@ namespace SleepyCobalt.Tools.TextureTools
     [Serializable]
     internal sealed class TextureImagePresetRecord
     {
+        public string id;
         public string name;
+        public int revision;
         public bool hasCommonSettings = true;
         public TextureCommonSettingsSnapshot commonSettings = new TextureCommonSettingsSnapshot();
         public TexturePlatformSettingsSnapshot defaultSettings = new TexturePlatformSettingsSnapshot();
