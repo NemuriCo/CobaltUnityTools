@@ -2085,6 +2085,7 @@ namespace SleepyCobalt.Tools.TextureTools
                 totalAssets += job.assetPaths.Count;
 
             int processedTextureCount = 0;
+            int upToDateTextureCount = 0;
             int skippedCount = 0;
             int failedCount = 0;
             int progressIndex = 0;
@@ -2110,6 +2111,18 @@ namespace SleepyCobalt.Tools.TextureTools
                             AssetImporter importer = AssetImporter.GetAtPath(path);
                             if (importer is TextureImporter textureImporter)
                             {
+                                if (!job.textureImporterPreset.CanBeAppliedTo(textureImporter))
+                                {
+                                    skippedCount++;
+                                    continue;
+                                }
+
+                                if (job.textureImporterPreset.DataEquals(textureImporter))
+                                {
+                                    upToDateTextureCount++;
+                                    continue;
+                                }
+
                                 job.textureImporterPreset.ApplyTo(textureImporter);
                                 textureImporter.SaveAndReimport();
                                 processedTextureCount++;
@@ -2140,8 +2153,9 @@ namespace SleepyCobalt.Tools.TextureTools
             }
 
             string message =
-                "已处理图片: " + processedTextureCount + "\n" +
-                "已跳过: " + skippedCount + "\n" +
+                "已应用图片: " + processedTextureCount + "\n" +
+                "已是最新设置: " + upToDateTextureCount + "\n" +
+                "无法应用/已跳过: " + skippedCount + "\n" +
                 "失败: " + failedCount;
             if (canceled)
                 message += "\n\n处理已取消，部分资源尚未处理。";
