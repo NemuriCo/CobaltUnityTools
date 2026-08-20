@@ -11,7 +11,6 @@ namespace SleepyCobalt.Tools.TextureTools
     {
         private enum ToolPage
         {
-            BatchImageSettings = 0,
             ColorBleed = 1,
             TextureCategories = 2
         }
@@ -22,7 +21,7 @@ namespace SleepyCobalt.Tools.TextureTools
             CreateBleedCopy
         }
 
-        [SerializeField] private ToolPage currentPage = ToolPage.BatchImageSettings;
+        [SerializeField] private ToolPage currentPage = ToolPage.TextureCategories;
 
         [SerializeField] private int paddingPixels = 16;
         [SerializeField] private int alphaThreshold = 8;
@@ -31,44 +30,10 @@ namespace SleepyCobalt.Tools.TextureTools
         [SerializeField] private bool skipBleedCopies = true;
         [SerializeField] private bool disableAlphaIsTransparency = true;
 
-        private const string PlatformPresetPrefsKey = "CobaltTools.TextureTools.PlatformPresets.v1";
-
         private static readonly string[] OutputModeLabels =
         {
             "覆盖原图",
             "生成 _Bleed 副本"
-        };
-
-        private static readonly string[] TextureCompressionLabels =
-        {
-            "Low Quality",
-            "Normal Quality",
-            "High Quality",
-            "None"
-        };
-
-        private static readonly TextureImporterCompression[] TextureCompressionValues =
-        {
-            TextureImporterCompression.CompressedLQ,
-            TextureImporterCompression.Compressed,
-            TextureImporterCompression.CompressedHQ,
-            TextureImporterCompression.Uncompressed
-        };
-
-        private static readonly string[] Etc2FallbackLabels =
-        {
-            "Use build settings",
-            "32-bit",
-            "16-bit",
-            "32-bit, half resolution"
-        };
-
-        private static readonly int[] Etc2FallbackValues =
-        {
-            0,
-            1,
-            2,
-            3
         };
 
         [MenuItem("CobaltTools/贴图工具", false, 20)]
@@ -101,7 +66,6 @@ namespace SleepyCobalt.Tools.TextureTools
             GUILayout.Label("贴图工具", EditorStyles.boldLabel);
             GUILayout.Space(6f);
 
-            DrawPageButton(ToolPage.BatchImageSettings, "批量图像设置");
             DrawPageButton(ToolPage.TextureCategories, "贴图分类");
             DrawPageButton(ToolPage.ColorBleed, "颜色溢出");
 
@@ -131,9 +95,6 @@ namespace SleepyCobalt.Tools.TextureTools
 
             switch (currentPage)
             {
-                case ToolPage.BatchImageSettings:
-                    DrawBatchImageSettingsPage();
-                    break;
                 case ToolPage.ColorBleed:
                     DrawColorBleedPage();
                     break;
@@ -195,18 +156,6 @@ namespace SleepyCobalt.Tools.TextureTools
                 if (GUILayout.Button("处理选中的 PNG", GUILayout.Height(36f)))
                     ProcessColorBleed(selectedPngs);
             }
-        }
-
-        private static TextureImporterCompression DrawTextureCompressionPopup(
-            GUIContent label,
-            TextureImporterCompression currentValue)
-        {
-            int selectedIndex = Array.IndexOf(TextureCompressionValues, currentValue);
-            if (selectedIndex < 0)
-                selectedIndex = 1;
-
-            selectedIndex = EditorGUILayout.Popup(label, selectedIndex, TextureCompressionLabels);
-            return TextureCompressionValues[Mathf.Clamp(selectedIndex, 0, TextureCompressionValues.Length - 1)];
         }
 
         private static void DrawSelectionSummary(int count, string label)
@@ -324,37 +273,6 @@ namespace SleepyCobalt.Tools.TextureTools
             List<string> paths = new List<string>(uniquePaths);
             paths.Sort(StringComparer.OrdinalIgnoreCase);
             return paths;
-        }
-
-        private List<string> CollectSelectedPlatformAssetPaths(bool includeSubfolders)
-        {
-            HashSet<string> uniquePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (string path in CollectSelectedAssetPaths(string.Empty, includeSubfolders))
-            {
-                AssetImporter importer = AssetImporter.GetAtPath(path);
-                if (importer is TextureImporter || IsSpriteAtlasImporter(importer))
-                    uniquePaths.Add(NormalizePath(path));
-            }
-
-            List<string> paths = new List<string>(uniquePaths);
-            paths.Sort(StringComparer.OrdinalIgnoreCase);
-            return paths;
-        }
-
-        private static bool IsSpriteAtlasImporter(AssetImporter importer)
-        {
-            if (importer == null)
-                return false;
-
-            string assetPath = NormalizePath(importer.assetPath);
-            if (assetPath.EndsWith(".spriteatlas", StringComparison.OrdinalIgnoreCase) ||
-                assetPath.EndsWith(".spriteatlasv2", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-
-            return importer.GetType().Name.IndexOf("SpriteAtlas", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static IEnumerable<string> CollectSelectedAssetPaths(string filter, bool includeSubfolders)

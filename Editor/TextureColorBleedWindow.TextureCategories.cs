@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
+using UnityEditor.Presets;
 using UnityEngine;
 
 namespace SleepyCobalt.Tools.TextureTools
@@ -54,11 +55,15 @@ namespace SleepyCobalt.Tools.TextureTools
         {
             internal string categoryName;
             internal List<string> assetPaths;
-            internal TextureCommonSettingsSnapshot commonSettings;
-            internal TexturePlatformSettingsSnapshot defaultSettings;
-            internal TexturePlatformSettingsSnapshot standaloneSettings;
-            internal TexturePlatformSettingsSnapshot androidSettings;
-            internal bool usesCachedFallback;
+            internal Preset textureImporterPreset;
+        }
+
+        private void OnEnable()
+        {
+            if (!Enum.IsDefined(typeof(ToolPage), currentPage))
+                currentPage = ToolPage.TextureCategories;
+
+            InitializeTextureCategoryPage();
         }
 
         private void InitializeTextureCategoryPage()
@@ -93,9 +98,7 @@ namespace SleepyCobalt.Tools.TextureTools
 
         private void DrawTextureCategoriesPage()
         {
-            EnsureImagePresetsLoaded();
             TextureCategoryProjectSettings settings = GetTextureCategorySettings();
-            SyncAllTextureCategoryPresetCaches(settings);
             EnsureTextureCategoryResolution(settings);
 
             textureCategoriesScrollPosition = EditorGUILayout.BeginScrollView(
@@ -104,7 +107,7 @@ namespace SleepyCobalt.Tools.TextureTools
                 true);
             EditorGUILayout.LabelField("贴图分类", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
-                "创建分类并绑定完整图像预设。可从 Project 窗口拖入图片、SpriteAtlas 或文件夹；" +
+                "创建分类并拖入 Unity 的 TextureImporter Preset 资源。可从 Project 窗口拖入图片或文件夹；" +
                 "文件夹会递归包含以后新增的资源。设置只会在点击应用按钮后写入。",
                 MessageType.Info);
 
@@ -124,7 +127,7 @@ namespace SleepyCobalt.Tools.TextureTools
             if (settings.categories.Count == 0)
             {
                 EditorGUILayout.HelpBox(
-                    "还没有分类。点击“新建分类”，绑定预设后把图片或文件夹拖入分类。",
+                    "还没有分类。点击“新建分类”，拖入 TextureImporter Preset 后把图片或文件夹拖入分类。",
                     MessageType.None);
             }
 
@@ -169,14 +172,13 @@ namespace SleepyCobalt.Tools.TextureTools
             if (ungroupedCount > 0)
             {
                 EditorGUILayout.HelpBox(
-                    "待分组范围内还有 " + textureCategoryResolution.ungroupedTextureCount + " 张图片和 " +
-                    textureCategoryResolution.ungroupedAtlasCount +
-                    " 个图集未加入任何分类，也没有被忽略。",
+                    "待分组范围内还有 " + textureCategoryResolution.ungroupedTextureCount +
+                    " 张图片未加入任何分类，也没有被忽略。",
                     MessageType.Warning);
             }
             else
             {
-                EditorGUILayout.HelpBox("待分组范围内的图片和图集都已分类或忽略。", MessageType.Info);
+                EditorGUILayout.HelpBox("待分组范围内的图片都已分类或忽略。", MessageType.Info);
             }
 
             showUngroupedTextures = EditorGUILayout.Foldout(
@@ -670,8 +672,7 @@ namespace SleepyCobalt.Tools.TextureTools
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.LabelField("待分组范围", EditorStyles.boldLabel);
             EditorGUILayout.LabelField(
-                "只检查这里添加的资源：" + textureCategoryResolution.classificationTextureCount +
-                " 张图片，" + textureCategoryResolution.classificationAtlasCount + " 个图集",
+                "只检查这里添加的资源：" + textureCategoryResolution.classificationTextureCount + " 张图片",
                 EditorStyles.miniLabel);
 
             DrawTextureClassificationDropArea(settings);
@@ -679,7 +680,7 @@ namespace SleepyCobalt.Tools.TextureTools
             if (settings.classificationSources.Count == 0)
             {
                 EditorGUILayout.HelpBox(
-                    "请从 Project 窗口拖入需要整理的图片、SpriteAtlas 或文件夹。不会再自动扫描整个项目。",
+                    "请从 Project 窗口拖入需要整理的图片或文件夹。不会再自动扫描整个项目。",
                     MessageType.Info);
             }
             else
@@ -744,7 +745,7 @@ namespace SleepyCobalt.Tools.TextureTools
         private void DrawTextureClassificationDropArea(TextureCategoryProjectSettings settings)
         {
             Rect dropArea = GUILayoutUtility.GetRect(0f, 48f, GUILayout.ExpandWidth(true));
-            GUI.Box(dropArea, "拖入需要分组的图片、SpriteAtlas 或文件夹", EditorStyles.helpBox);
+            GUI.Box(dropArea, "拖入需要分组的图片或文件夹", EditorStyles.helpBox);
 
             Event currentEvent = Event.current;
             if (!dropArea.Contains(currentEvent.mousePosition) ||
@@ -1038,7 +1039,7 @@ namespace SleepyCobalt.Tools.TextureTools
         private void DrawIgnoredTextureDropArea(TextureCategoryProjectSettings settings)
         {
             Rect dropArea = GUILayoutUtility.GetRect(0f, 42f, GUILayout.ExpandWidth(true));
-            GUI.Box(dropArea, "拖入要忽略的图片、SpriteAtlas 或文件夹", EditorStyles.helpBox);
+            GUI.Box(dropArea, "拖入要忽略的图片或文件夹", EditorStyles.helpBox);
 
             Event currentEvent = Event.current;
             if (!dropArea.Contains(currentEvent.mousePosition) ||
@@ -1211,7 +1212,7 @@ namespace SleepyCobalt.Tools.TextureTools
 
             EditorGUILayout.LabelField(
                 "当前成员",
-                resolved.textureCount + " 张图片，" + resolved.atlasCount + " 个图集");
+                resolved.textureCount + " 张图片");
 
             if (resolved.missingSources.Count > 0)
             {
@@ -1241,63 +1242,44 @@ namespace SleepyCobalt.Tools.TextureTools
             TextureCategoryProjectSettings settings,
             TextureCategoryRecord category)
         {
-            List<TextureImagePresetRecord> completePresets = GetCompleteImagePresets();
-            TextureImagePresetRecord livePreset = FindCompleteImagePreset(category.presetId);
-            bool hasMissingLink = !string.IsNullOrEmpty(category.presetId) && livePreset == null;
-
-            List<string> labels = new List<string> { "未选择" };
-            List<TextureImagePresetRecord> mappedPresets = new List<TextureImagePresetRecord> { null };
-            int selectedIndex = 0;
-
-            if (hasMissingLink)
+            EditorGUI.BeginChangeCheck();
+            Preset preset = (Preset)EditorGUILayout.ObjectField(
+                new GUIContent("TextureImporter Preset", "拖入 Preset Type 为 UnityEditor.TextureImporter 的资源。"),
+                category.textureImporterPreset,
+                typeof(Preset),
+                false);
+            if (EditorGUI.EndChangeCheck())
             {
-                labels.Add("缺失：" + (string.IsNullOrEmpty(category.presetName) ? category.presetId : category.presetName));
-                mappedPresets.Add(null);
-                selectedIndex = 1;
-            }
-
-            foreach (TextureImagePresetRecord preset in completePresets)
-            {
-                labels.Add(preset.name);
-                mappedPresets.Add(preset);
-                if (preset.id == category.presetId)
-                    selectedIndex = mappedPresets.Count - 1;
-            }
-
-            int newIndex = EditorGUILayout.Popup("图像设置预设", selectedIndex, labels.ToArray());
-            if (newIndex != selectedIndex)
-            {
-                if (newIndex == 0)
-                {
-                    category.presetId = string.Empty;
-                    category.presetName = string.Empty;
-                    category.cachedPresetRevision = -1;
-                    category.hasCachedPreset = false;
-                }
-                else if (mappedPresets[newIndex] != null)
-                {
-                    category.CachePreset(mappedPresets[newIndex]);
-                }
-
+                category.textureImporterPreset = preset;
                 settings.SaveSettings();
-                livePreset = FindCompleteImagePreset(category.presetId);
-                hasMissingLink = !string.IsNullOrEmpty(category.presetId) && livePreset == null;
             }
 
-            if (livePreset != null)
+            if (category.textureImporterPreset == null)
             {
-                EditorGUILayout.LabelField("预设状态", "实时跟随“" + livePreset.name + "”", EditorStyles.miniLabel);
+                EditorGUILayout.HelpBox("请拖入一个 TextureImporter Preset 资源。", MessageType.Error);
             }
-            else if (hasMissingLink && category.HasUsableCachedPreset)
+            else if (!IsTextureImporterPreset(category.textureImporterPreset))
             {
                 EditorGUILayout.HelpBox(
-                    "本机找不到原预设“" + category.presetName + "”，应用时会使用分类中缓存的最近设置。可从下拉框重新关联。",
-                    MessageType.Warning);
+                    "当前 Preset 的类型不是 UnityEditor.TextureImporter，无法应用到图片。",
+                    MessageType.Error);
             }
             else
             {
-                EditorGUILayout.HelpBox("请选择一个完整图像预设。", MessageType.Error);
+                EditorGUILayout.LabelField(
+                    "预设状态",
+                    "直接使用“" + category.textureImporterPreset.name + "”",
+                    EditorStyles.miniLabel);
             }
+        }
+
+        private static bool IsTextureImporterPreset(Preset preset)
+        {
+            return preset != null &&
+                   string.Equals(
+                       preset.GetTargetFullTypeName(),
+                       typeof(TextureImporter).FullName,
+                       StringComparison.Ordinal);
         }
 
         private void DrawTextureCategoryDropArea(
@@ -1305,7 +1287,7 @@ namespace SleepyCobalt.Tools.TextureTools
             TextureCategoryRecord category)
         {
             Rect dropArea = GUILayoutUtility.GetRect(0f, 54f, GUILayout.ExpandWidth(true));
-            GUI.Box(dropArea, "从 Project 拖入图片、SpriteAtlas 或文件夹", EditorStyles.helpBox);
+            GUI.Box(dropArea, "从 Project 拖入图片或文件夹", EditorStyles.helpBox);
 
             Event currentEvent = Event.current;
             if (!dropArea.Contains(currentEvent.mousePosition) ||
@@ -1414,7 +1396,7 @@ namespace SleepyCobalt.Tools.TextureTools
             bool isFolder = AssetDatabase.IsValidFolder(path);
             if (!isFolder && !TextureCategoryResolver.TryClassifySupportedAsset(path, out _, out _))
             {
-                reason = "不是图片或 SpriteAtlas";
+                reason = "不是可设置 TextureImporter 的图片";
                 return false;
             }
 
@@ -2011,11 +1993,10 @@ namespace SleepyCobalt.Tools.TextureTools
             TextureCategoryResolvedRecord resolved)
         {
             return resolved != null &&
-                   resolved.assetPaths.Count > 0 &&
+                   resolved.textureCount > 0 &&
                    resolved.conflictPaths.Count == 0 &&
                    TryValidateTextureCategoryName(settings, category, out _) &&
-                   !string.IsNullOrEmpty(category.presetId) &&
-                   category.HasUsableCachedPreset;
+                   IsTextureImporterPreset(category.textureImporterPreset);
         }
 
         private bool CanApplyAllTextureCategories(TextureCategoryProjectSettings settings)
@@ -2029,11 +2010,11 @@ namespace SleepyCobalt.Tools.TextureTools
                 TextureCategoryRecord category = resolved.category;
                 if (!TryValidateTextureCategoryName(settings, category, out _))
                     return false;
-                if (resolved.assetPaths.Count == 0)
+                if (resolved.textureCount == 0)
                     continue;
 
                 hasTargets = true;
-                if (string.IsNullOrEmpty(category.presetId) || !category.HasUsableCachedPreset)
+                if (!IsTextureImporterPreset(category.textureImporterPreset))
                     return false;
             }
 
@@ -2048,8 +2029,7 @@ namespace SleepyCobalt.Tools.TextureTools
             bool confirmed = EditorUtility.DisplayDialog(
                 "应用贴图分类",
                 "分类：“" + job.categoryName + "”\n" +
-                "即将处理 " + resolved.textureCount + " 张图片和 " + resolved.atlasCount + " 个图集。" +
-                (job.usesCachedFallback ? "\n\n本机缺少原预设，将使用分类缓存设置。" : string.Empty),
+                "即将应用 TextureImporter Preset 到 " + resolved.textureCount + " 张图片。",
                 "应用",
                 "取消");
             if (!confirmed)
@@ -2066,25 +2046,18 @@ namespace SleepyCobalt.Tools.TextureTools
 
             List<TextureCategoryApplyJob> jobs = new List<TextureCategoryApplyJob>();
             int textureCount = 0;
-            int atlasCount = 0;
-            int fallbackCount = 0;
             foreach (TextureCategoryResolvedRecord resolved in textureCategoryResolution.categories)
             {
-                if (resolved.assetPaths.Count == 0)
+                if (resolved.textureCount == 0)
                     continue;
 
                 TextureCategoryApplyJob job = CreateTextureCategoryApplyJob(resolved.category, resolved);
                 jobs.Add(job);
                 textureCount += resolved.textureCount;
-                atlasCount += resolved.atlasCount;
-                if (job.usesCachedFallback)
-                    fallbackCount++;
             }
 
             string confirmation =
-                "即将应用 " + jobs.Count + " 个分类，处理 " + textureCount + " 张图片和 " + atlasCount + " 个图集。";
-            if (fallbackCount > 0)
-                confirmation += "\n\n其中 " + fallbackCount + " 个分类会使用缓存的预设设置。";
+                "即将把各分类的 TextureImporter Preset 应用到 " + textureCount + " 张图片。";
 
             if (!EditorUtility.DisplayDialog("应用全部贴图分类", confirmation, "应用全部", "取消"))
                 return;
@@ -2100,11 +2073,7 @@ namespace SleepyCobalt.Tools.TextureTools
             {
                 categoryName = category.name.Trim(),
                 assetPaths = new List<string>(resolved.assetPaths),
-                commonSettings = category.cachedCommonSettings.Clone(),
-                defaultSettings = category.cachedDefaultSettings.Clone(),
-                standaloneSettings = category.cachedStandaloneSettings.Clone(),
-                androidSettings = category.cachedAndroidSettings.Clone(),
-                usesCachedFallback = FindCompleteImagePreset(category.presetId) == null
+                textureImporterPreset = category.textureImporterPreset
             };
         }
 
@@ -2115,7 +2084,6 @@ namespace SleepyCobalt.Tools.TextureTools
                 totalAssets += job.assetPaths.Count;
 
             int processedTextureCount = 0;
-            int processedAtlasCount = 0;
             int skippedCount = 0;
             int failedCount = 0;
             int progressIndex = 0;
@@ -2141,24 +2109,9 @@ namespace SleepyCobalt.Tools.TextureTools
                             AssetImporter importer = AssetImporter.GetAtPath(path);
                             if (importer is TextureImporter textureImporter)
                             {
-                                TextureImageSettingsUtility.ApplyTextureImporter(
-                                    textureImporter,
-                                    job.commonSettings,
-                                    job.defaultSettings,
-                                    job.standaloneSettings,
-                                    job.androidSettings);
+                                job.textureImporterPreset.ApplyTo(textureImporter);
                                 textureImporter.SaveAndReimport();
                                 processedTextureCount++;
-                            }
-                            else if (IsSpriteAtlasImporter(importer))
-                            {
-                                TextureImageSettingsUtility.ApplySpriteAtlas(
-                                    importer,
-                                    job.defaultSettings,
-                                    job.standaloneSettings,
-                                    job.androidSettings);
-                                importer.SaveAndReimport();
-                                processedAtlasCount++;
                             }
                             else
                             {
@@ -2187,7 +2140,6 @@ namespace SleepyCobalt.Tools.TextureTools
 
             string message =
                 "已处理图片: " + processedTextureCount + "\n" +
-                "已处理图集: " + processedAtlasCount + "\n" +
                 "已跳过: " + skippedCount + "\n" +
                 "失败: " + failedCount;
             if (canceled)
@@ -2205,76 +2157,6 @@ namespace SleepyCobalt.Tools.TextureTools
 
             Debug.Log("[TextureTools] " + operationTitle + "\n" + message);
             EditorUtility.DisplayDialog(operationTitle + "结果", message, "确定");
-        }
-
-        private void SyncAllTextureCategoryPresetCaches(TextureCategoryProjectSettings settings)
-        {
-            bool changed = false;
-            foreach (TextureCategoryRecord category in settings.categories)
-            {
-                TextureImagePresetRecord preset = FindCompleteImagePreset(category.presetId);
-                if (preset == null)
-                    continue;
-
-                if (!category.HasUsableCachedPreset ||
-                    category.cachedPresetRevision != preset.revision ||
-                    category.presetName != preset.name)
-                {
-                    category.CachePreset(preset);
-                    changed = true;
-                }
-            }
-
-            if (changed)
-                settings.SaveSettings();
-        }
-
-        private void SyncTextureCategoriesForPreset(TextureImagePresetRecord preset)
-        {
-            if (preset == null || string.IsNullOrEmpty(preset.id) ||
-                !preset.hasCommonSettings || preset.commonSettings == null)
-            {
-                return;
-            }
-
-            TextureCategoryProjectSettings settings = TextureCategoryProjectSettings.instance;
-            if (settings.EnsureIntegrity())
-                settings.SaveSettings();
-
-            bool changed = false;
-            foreach (TextureCategoryRecord category in settings.categories)
-            {
-                if (category.presetId != preset.id)
-                    continue;
-
-                category.CachePreset(preset);
-                changed = true;
-            }
-
-            if (changed)
-                settings.SaveSettings();
-        }
-
-        private TextureImagePresetRecord FindCompleteImagePreset(string presetId)
-        {
-            if (string.IsNullOrEmpty(presetId))
-                return null;
-
-            EnsureImagePresetsLoaded();
-            return imagePresetCollection.presets.Find(preset =>
-                preset != null &&
-                preset.id == presetId &&
-                preset.hasCommonSettings &&
-                preset.commonSettings != null);
-        }
-
-        private List<TextureImagePresetRecord> GetCompleteImagePresets()
-        {
-            EnsureImagePresetsLoaded();
-            List<TextureImagePresetRecord> presets = imagePresetCollection.presets.FindAll(preset =>
-                preset != null && preset.hasCommonSettings && preset.commonSettings != null);
-            presets.Sort((left, right) => string.Compare(left.name, right.name, StringComparison.OrdinalIgnoreCase));
-            return presets;
         }
 
         private static string GenerateUniqueTextureCategoryName(IList<TextureCategoryRecord> categories)

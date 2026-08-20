@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
+using UnityEditor.Presets;
 using UnityEngine;
 
 namespace SleepyCobalt.Tools.TextureTools
@@ -27,49 +28,9 @@ namespace SleepyCobalt.Tools.TextureTools
         public string id;
         public string name;
         public bool expanded = true;
-        public string presetId;
-        public string presetName;
-        public int cachedPresetRevision = -1;
-        public bool hasCachedPreset;
-        public TextureCommonSettingsSnapshot cachedCommonSettings = new TextureCommonSettingsSnapshot();
-        public TexturePlatformSettingsSnapshot cachedDefaultSettings = new TexturePlatformSettingsSnapshot();
-        public TexturePlatformSettingsSnapshot cachedStandaloneSettings = new TexturePlatformSettingsSnapshot();
-        public TexturePlatformSettingsSnapshot cachedAndroidSettings = new TexturePlatformSettingsSnapshot();
+        public Preset textureImporterPreset;
         public List<TextureCategorySourceRecord> sources = new List<TextureCategorySourceRecord>();
         public List<string> excludedAssetGuids = new List<string>();
-
-        internal bool HasUsableCachedPreset
-        {
-            get
-            {
-                return hasCachedPreset &&
-                       cachedCommonSettings != null &&
-                       cachedDefaultSettings != null &&
-                       cachedStandaloneSettings != null &&
-                       cachedAndroidSettings != null;
-            }
-        }
-
-        internal void CachePreset(TextureImagePresetRecord preset)
-        {
-            if (preset == null || !preset.hasCommonSettings || preset.commonSettings == null)
-                throw new ArgumentException("只能缓存完整图像预设。", nameof(preset));
-
-            presetId = preset.id;
-            presetName = preset.name;
-            cachedPresetRevision = preset.revision;
-            cachedCommonSettings = preset.commonSettings.Clone();
-            cachedDefaultSettings = preset.defaultSettings == null
-                ? new TexturePlatformSettingsSnapshot()
-                : preset.defaultSettings.Clone();
-            cachedStandaloneSettings = preset.standaloneSettings == null
-                ? new TexturePlatformSettingsSnapshot()
-                : preset.standaloneSettings.Clone();
-            cachedAndroidSettings = preset.androidSettings == null
-                ? new TexturePlatformSettingsSnapshot()
-                : preset.androidSettings.Clone();
-            hasCachedPreset = true;
-        }
 
         internal void EnsureObjects()
         {
@@ -77,14 +38,6 @@ namespace SleepyCobalt.Tools.TextureTools
                 sources = new List<TextureCategorySourceRecord>();
             if (excludedAssetGuids == null)
                 excludedAssetGuids = new List<string>();
-            if (cachedCommonSettings == null)
-                cachedCommonSettings = new TextureCommonSettingsSnapshot();
-            if (cachedDefaultSettings == null)
-                cachedDefaultSettings = new TexturePlatformSettingsSnapshot();
-            if (cachedStandaloneSettings == null)
-                cachedStandaloneSettings = new TexturePlatformSettingsSnapshot();
-            if (cachedAndroidSettings == null)
-                cachedAndroidSettings = new TexturePlatformSettingsSnapshot();
         }
     }
 
@@ -379,12 +332,6 @@ namespace SleepyCobalt.Tools.TextureTools
                 return true;
             }
 
-            if (IsSpriteAtlasImporter(importer))
-            {
-                isAtlas = true;
-                return true;
-            }
-
             return false;
         }
 
@@ -434,17 +381,6 @@ namespace SleepyCobalt.Tools.TextureTools
             }
 
             output.Add(path);
-        }
-
-        private static bool IsSpriteAtlasImporter(AssetImporter importer)
-        {
-            if (importer == null)
-                return false;
-
-            string assetPath = NormalizePath(importer.assetPath);
-            return assetPath.EndsWith(".spriteatlas", StringComparison.OrdinalIgnoreCase) ||
-                   assetPath.EndsWith(".spriteatlasv2", StringComparison.OrdinalIgnoreCase) ||
-                   importer.GetType().Name.IndexOf("SpriteAtlas", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static string NormalizePath(string path)
