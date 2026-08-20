@@ -11,10 +11,19 @@ namespace SleepyCobalt.Tools.TextureTools
     {
         [SerializeField] private Vector2 textureCategoriesScrollPosition;
         [SerializeField] private bool showUngroupedTextures = true;
+        [SerializeField] private bool showUngroupedInformativeAlpha = true;
+        [SerializeField] private bool showUngroupedNonInformativeAlpha = true;
         [SerializeField] private bool showIgnoredTextureRules;
 
         private TextureCategoryResolutionSet textureCategoryResolution;
         private bool textureCategoryResolutionDirty = true;
+        private readonly HashSet<string> selectedUngroupedAssetPaths =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, HashSet<string>> selectedTextureCategoryMemberPaths =
+            new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> lastSelectedTextureCategoryMemberPaths =
+            new Dictionary<string, string>(StringComparer.Ordinal);
+        private string lastSelectedUngroupedAssetPath;
 
         private sealed class TextureCategoryApplyJob
         {
@@ -62,7 +71,10 @@ namespace SleepyCobalt.Tools.TextureTools
             SyncAllTextureCategoryPresetCaches(settings);
             EnsureTextureCategoryResolution(settings);
 
-            textureCategoriesScrollPosition = EditorGUILayout.BeginScrollView(textureCategoriesScrollPosition);
+            textureCategoriesScrollPosition = EditorGUILayout.BeginScrollView(
+                textureCategoriesScrollPosition,
+                false,
+                true);
             EditorGUILayout.LabelField("贴图分类", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
                 "创建分类并绑定完整图像预设。可从 Project 窗口拖入图片、SpriteAtlas 或文件夹；" +
@@ -125,6 +137,7 @@ namespace SleepyCobalt.Tools.TextureTools
         private void DrawUngroupedTextureSection(TextureCategoryProjectSettings settings)
         {
             int ungroupedCount = textureCategoryResolution.ungroupedAssetPaths.Count;
+            PruneSelectedUngroupedAssets();
             if (ungroupedCount > 0)
             {
                 EditorGUILayout.HelpBox(
@@ -145,40 +158,169 @@ namespace SleepyCobalt.Tools.TextureTools
             if (!showUngroupedTextures || ungroupedCount == 0)
                 return;
 
-            const int maxVisibleAssets = 200;
-            int visibleCount = Mathf.Min(maxVisibleAssets, ungroupedCount);
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            for (int index = 0; index < visibleCount; index++)
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField(
+                selectedUngroupedAssetPaths.Count == 0
+                    ? "点击选择贴图，Ctrl/Cmd 多选，Shift 连选"
+                    : "已选择 " + selectedUngroupedAssetPaths.Count + " 个资源",
+                EditorStyles.miniLabel);
+            if (GUILayout.Button("全选", GUILayout.Width(48f)))
             {
-                string path = textureCategoryResolution.ungroupedAssetPaths[index];
-                EditorGUILayout.BeginHorizontal();
-                using (new EditorGUI.DisabledScope(true))
-                {
-                    EditorGUILayout.ObjectField(
-                        AssetDatabase.LoadMainAssetAtPath(path),
-                        typeof(UnityEngine.Object),
-                        false);
-                }
-
+                selectedUngroupedAssetPaths.Clear();
+                selectedUngroupedAssetPaths.UnionWith(textureCategoryResolution.ungroupedAssetPaths);
+                Repaint();
+            }
+            if (GUILayout.Button("清空选择", GUILayout.Width(64f)))
+            {
+                selectedUngroupedAssetPaths.Clear();
+                lastSelectedUngroupedAssetPath = null;
+                Repaint();
+            }
+            using (new EditorGUI.DisabledScope(selectedUngroupedAssetPaths.Count == 0))
+            {
                 if (GUILayout.Button("加入分类…", GUILayout.Width(72f)))
-                    ShowAddUngroupedTextureMenu(settings, path);
-                if (GUILayout.Button("忽略", GUILayout.Width(42f)))
-                    AddIgnoredTextureSource(settings, path);
-                if (GUILayout.Button("忽略文件夹", GUILayout.Width(72f)))
-                    AddIgnoredTextureFolder(settings, path);
-                EditorGUILayout.EndHorizontal();
-                EditorGUILayout.LabelField(path, EditorStyles.miniLabel);
+                    ShowAddUngroupedTextureMenu(settings, GetSelectedUngroupedAssetPaths());
+                if (GUILayout.Button("忽略", GUILayout.Width(48f)))
+                    AddIgnoredUngroupedTextures(settings, GetSelectedUngroupedAssetPaths());
             }
+            EditorGUILayout.EndHorizontal();
 
-            if (ungroupedCount > maxVisibleAssets)
-            {
-                EditorGUILayout.LabelField(
-                    "仅显示前 " + maxVisibleAssets + " 个，另外 " +
-                    (ungroupedCount - maxVisibleAssets) + " 个仍计入未分组提示。",
-                    EditorStyles.miniLabel);
-            }
+            DrawUngroupedTextureGroup(
+                "A 通道有信息（" + textureCategoryResolution.ungroupedInformativeAlphaAssetPaths.Count + "）",
+                textureCategoryResolution.ungroupedInformativeAlphaAssetPaths,
+                ref showUngroupedInformativeAlpha);
+            DrawUngroupedTextureGroup(
+                "A 通道无信息/非图片（" + textureCategoryResolution.ungroupedNonInformativeAlphaAssetPaths.Count + "）",
+                textureCategoryResolution.ungroupedNonInformativeAlphaAssetPaths,
+                ref showUngroupedNonInformativeAlpha);
 
             EditorGUILayout.EndVertical();
+        }
+
+        private void DrawUngroupedTextureGroup(
+            string title,
+            IList<string> assetPaths,
+            ref bool expanded)
+        {
+            expanded = EditorGUILayout.Foldout(expanded, title, true, EditorStyles.foldoutHeader);
+            if (!expanded || assetPaths == null || assetPaths.Count == 0)
+                return;
+
+            const float tileWidth = 112f;
+            const float tileHeight = 112f;
+            const float previewSize = 78f;
+            int columnCount = Mathf.Max(1, Mathf.FloorToInt((GetTextureCategoryContentWidth() - 12f) / tileWidth));
+            for (int index = 0; index < assetPaths.Count; index++)
+            {
+                if (index % columnCount == 0)
+                    EditorGUILayout.BeginHorizontal();
+
+                string path = assetPaths[index];
+                Rect tileRect = GUILayoutUtility.GetRect(
+                    tileWidth,
+                    tileHeight,
+                    GUILayout.Width(tileWidth),
+                    GUILayout.Height(tileHeight));
+                bool selected = selectedUngroupedAssetPaths.Contains(path);
+                if (selected)
+                    EditorGUI.DrawRect(tileRect, new Color(0.24f, 0.48f, 0.75f, 0.45f));
+                else
+                    GUI.Box(tileRect, GUIContent.none, EditorStyles.helpBox);
+
+                UnityEngine.Object asset = AssetDatabase.LoadMainAssetAtPath(path);
+                Texture2D preview = asset == null ? null : AssetPreview.GetAssetPreview(asset);
+                if (preview == null && asset != null)
+                    preview = AssetPreview.GetMiniThumbnail(asset);
+                Rect previewRect = new Rect(
+                    tileRect.x + (tileRect.width - previewSize) * 0.5f,
+                    tileRect.y + 4f,
+                    previewSize,
+                    previewSize);
+                if (preview != null)
+                    GUI.DrawTexture(previewRect, preview, ScaleMode.ScaleToFit, true);
+
+                string label = Path.GetFileName(path);
+                GUI.Label(
+                    new Rect(tileRect.x + 4f, tileRect.y + previewSize + 7f, tileRect.width - 8f, 18f),
+                    label,
+                    EditorStyles.centeredGreyMiniLabel);
+
+                Event currentEvent = Event.current;
+                bool actionKey = currentEvent.control || currentEvent.command;
+                bool shiftKey = currentEvent.shift;
+                if (GUI.Button(tileRect, GUIContent.none, GUIStyle.none))
+                    SelectUngroupedAsset(assetPaths, index, actionKey, shiftKey);
+
+                if (index % columnCount == columnCount - 1 || index == assetPaths.Count - 1)
+                    EditorGUILayout.EndHorizontal();
+            }
+        }
+
+        private void SelectUngroupedAsset(
+            IList<string> assetPaths,
+            int index,
+            bool actionKey,
+            bool shiftKey)
+        {
+            if (assetPaths == null || index < 0 || index >= assetPaths.Count)
+                return;
+
+            string path = assetPaths[index];
+            if (shiftKey && !string.IsNullOrEmpty(lastSelectedUngroupedAssetPath))
+            {
+                IList<string> selectionOrder = textureCategoryResolution.ungroupedAssetPaths;
+                int anchorIndex = selectionOrder.IndexOf(lastSelectedUngroupedAssetPath);
+                int targetIndex = selectionOrder.IndexOf(path);
+                if (anchorIndex >= 0 && targetIndex >= 0)
+                {
+                    if (!actionKey)
+                        selectedUngroupedAssetPaths.Clear();
+                    int start = Mathf.Min(anchorIndex, targetIndex);
+                    int end = Mathf.Max(anchorIndex, targetIndex);
+                    for (int rangeIndex = start; rangeIndex <= end; rangeIndex++)
+                        selectedUngroupedAssetPaths.Add(selectionOrder[rangeIndex]);
+                    lastSelectedUngroupedAssetPath = path;
+                    Repaint();
+                    return;
+                }
+            }
+
+            if (actionKey)
+            {
+                if (!selectedUngroupedAssetPaths.Add(path))
+                    selectedUngroupedAssetPaths.Remove(path);
+            }
+            else
+            {
+                selectedUngroupedAssetPaths.Clear();
+                selectedUngroupedAssetPaths.Add(path);
+            }
+
+            lastSelectedUngroupedAssetPath = path;
+            Repaint();
+        }
+
+        private void PruneSelectedUngroupedAssets()
+        {
+            HashSet<string> validPaths = new HashSet<string>(
+                textureCategoryResolution.ungroupedAssetPaths,
+                StringComparer.OrdinalIgnoreCase);
+            selectedUngroupedAssetPaths.RemoveWhere(path => !validPaths.Contains(path));
+            if (!string.IsNullOrEmpty(lastSelectedUngroupedAssetPath) && !validPaths.Contains(lastSelectedUngroupedAssetPath))
+                lastSelectedUngroupedAssetPath = null;
+        }
+
+        private List<string> GetSelectedUngroupedAssetPaths()
+        {
+            List<string> paths = new List<string>();
+            foreach (string path in textureCategoryResolution.ungroupedAssetPaths)
+            {
+                if (selectedUngroupedAssetPaths.Contains(path))
+                    paths.Add(path);
+            }
+
+            return paths;
         }
 
         private void DrawTextureClassificationScope(TextureCategoryProjectSettings settings)
@@ -400,7 +542,9 @@ namespace SleepyCobalt.Tools.TextureTools
             EditorGUILayout.Space(6f);
         }
 
-        private void ShowAddUngroupedTextureMenu(TextureCategoryProjectSettings settings, string path)
+        private void ShowAddUngroupedTextureMenu(
+            TextureCategoryProjectSettings settings,
+            IList<string> paths)
         {
             GenericMenu menu = new GenericMenu();
             bool hasCategory = false;
@@ -414,7 +558,7 @@ namespace SleepyCobalt.Tools.TextureTools
                 menu.AddItem(
                     new GUIContent(category.name.Trim()),
                     false,
-                    () => AddUngroupedTextureToCategory(settings, targetCategory, path));
+                    () => AddUngroupedTexturesToCategory(settings, targetCategory, paths));
             }
 
             if (!hasCategory)
@@ -422,31 +566,97 @@ namespace SleepyCobalt.Tools.TextureTools
             menu.ShowAsContext();
         }
 
-        private void AddUngroupedTextureToCategory(
+        private void AddUngroupedTexturesToCategory(
             TextureCategoryProjectSettings settings,
             TextureCategoryRecord category,
-            string path)
+            IList<string> paths)
         {
-            if (!TryCreateTextureCategorySource(path, out TextureCategorySourceRecord source, out string reason))
-            {
-                EditorUtility.DisplayDialog("无法加入分类", reason, "确定");
+            if (category == null || paths == null || paths.Count == 0)
                 return;
+
+            bool changed = false;
+            List<string> rejected = new List<string>();
+            foreach (string path in paths)
+            {
+                if (!TryCreateTextureCategorySource(path, out TextureCategorySourceRecord source, out string reason))
+                {
+                    rejected.Add(path + "：" + reason);
+                    continue;
+                }
+
+                if (source.kind == TextureCategorySourceKind.Asset &&
+                    category.excludedAssetGuids.Remove(source.guid))
+                {
+                    changed = true;
+                }
+
+                bool duplicate = category.sources.Exists(item =>
+                    item != null && item.kind == source.kind && item.guid == source.guid);
+                if (!duplicate)
+                {
+                    category.sources.Add(source);
+                    changed = true;
+                }
             }
 
-            bool duplicate = category.sources.Exists(item =>
-                item != null && item.kind == source.kind && item.guid == source.guid);
-            if (!duplicate)
+            if (changed)
             {
-                category.sources.Add(source);
                 settings.SaveSettings();
                 MarkTextureCategoryResolutionDirty();
                 Repaint();
             }
+
+            if (rejected.Count > 0)
+            {
+                int displayCount = Mathf.Min(5, rejected.Count);
+                EditorUtility.DisplayDialog(
+                    "部分资源未加入分类",
+                    string.Join("\n", rejected.GetRange(0, displayCount).ToArray()),
+                    "确定");
+            }
         }
 
-        private void AddIgnoredTextureSource(TextureCategoryProjectSettings settings, string path)
+        private void AddIgnoredUngroupedTextures(
+            TextureCategoryProjectSettings settings,
+            IList<string> paths)
         {
-            AddIgnoredTextureRule(settings, path);
+            if (paths == null || paths.Count == 0)
+                return;
+
+            bool changed = false;
+            List<string> rejected = new List<string>();
+            foreach (string path in paths)
+            {
+                if (!TryCreateTextureCategorySource(path, out TextureCategorySourceRecord source, out string reason))
+                {
+                    rejected.Add(path + "：" + reason);
+                    continue;
+                }
+
+                bool duplicate = settings.ignoredSources.Exists(item =>
+                    item != null && item.kind == source.kind && item.guid == source.guid);
+                if (!duplicate)
+                {
+                    settings.ignoredSources.Add(source);
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                settings.SaveSettings();
+                MarkTextureCategoryResolutionDirty();
+                Repaint();
+            }
+
+            if (rejected.Count > 0)
+            {
+                int displayCount = Mathf.Min(5, rejected.Count);
+                EditorUtility.DisplayDialog(
+                    "部分资源未添加忽略规则",
+                    string.Join("\n", rejected.GetRange(0, displayCount).ToArray()),
+                    "确定");
+            }
         }
 
         private void AddIgnoredTextureFolder(TextureCategoryProjectSettings settings, string assetPath)
@@ -565,8 +775,22 @@ namespace SleepyCobalt.Tools.TextureTools
 
         private void DrawTextureCategoryToolbar(TextureCategoryProjectSettings settings)
         {
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("新建分类"))
+            Rect toolbarRect = GUILayoutUtility.GetRect(0f, 24f, GUILayout.ExpandWidth(true));
+            const float spacing = 4f;
+            float buttonWidth = Mathf.Max(1f, (toolbarRect.width - spacing * 2f) / 3f);
+            Rect createRect = new Rect(toolbarRect.x, toolbarRect.y, buttonWidth, toolbarRect.height);
+            Rect refreshRect = new Rect(
+                createRect.xMax + spacing,
+                toolbarRect.y,
+                buttonWidth,
+                toolbarRect.height);
+            Rect applyRect = new Rect(
+                refreshRect.xMax + spacing,
+                toolbarRect.y,
+                buttonWidth,
+                toolbarRect.height);
+
+            if (GUI.Button(createRect, "新建分类"))
             {
                 settings.categories.Add(new TextureCategoryRecord
                 {
@@ -578,18 +802,22 @@ namespace SleepyCobalt.Tools.TextureTools
                 MarkTextureCategoryResolutionDirty();
             }
 
-            if (GUILayout.Button("刷新成员"))
+            if (GUI.Button(refreshRect, "刷新成员"))
                 MarkTextureCategoryResolutionDirty();
 
             EnsureTextureCategoryResolution(settings);
             using (new EditorGUI.DisabledScope(!CanApplyAllTextureCategories(settings)))
             {
-                if (GUILayout.Button("应用全部分类", GUILayout.Height(24f)))
+                if (GUI.Button(applyRect, "应用全部分类"))
                     ApplyAllTextureCategories(settings);
             }
 
-            EditorGUILayout.EndHorizontal();
             EditorGUILayout.Space(6f);
+        }
+
+        private float GetTextureCategoryContentWidth()
+        {
+            return Mathf.Max(240f, position.width - 160f - 32f);
         }
 
         private bool DrawTextureCategoryCard(
@@ -653,18 +881,7 @@ namespace SleepyCobalt.Tools.TextureTools
             if (resolved.conflictPaths.Count > 0)
                 DrawTextureCategoryConflicts(resolved);
 
-            bool showMembers = EditorGUILayout.Foldout(
-                category.showResolvedMembers,
-                "查看解析成员（" + resolved.assetPaths.Count + "）",
-                true);
-            if (showMembers != category.showResolvedMembers)
-            {
-                category.showResolvedMembers = showMembers;
-                settings.SaveSettings();
-            }
-
-            if (category.showResolvedMembers)
-                DrawResolvedTextureCategoryMembers(resolved);
+            DrawTextureCategoryMemberGrid(settings, category, resolved);
 
             bool canApply = CanApplyTextureCategory(settings, category, resolved);
             using (new EditorGUI.DisabledScope(!canApply))
@@ -784,6 +1001,12 @@ namespace SleepyCobalt.Tools.TextureTools
                     continue;
                 }
 
+                if (source.kind == TextureCategorySourceKind.Asset &&
+                    category.excludedAssetGuids.Remove(source.guid))
+                {
+                    changed = true;
+                }
+
                 bool duplicate = category.sources.Exists(item =>
                     item != null && item.kind == source.kind && item.guid == source.guid);
                 if (duplicate)
@@ -875,17 +1098,17 @@ namespace SleepyCobalt.Tools.TextureTools
             TextureCategoryResolvedRecord resolved)
         {
             EditorGUILayout.LabelField("来源规则", EditorStyles.boldLabel);
-            if (category.sources.Count == 0)
-            {
-                EditorGUILayout.LabelField("尚未添加来源。", EditorStyles.miniLabel);
-                return;
-            }
-
             HashSet<TextureCategorySourceRecord> missing =
                 new HashSet<TextureCategorySourceRecord>(resolved.missingSources);
+            bool displayedRule = false;
             for (int index = 0; index < category.sources.Count; index++)
             {
                 TextureCategorySourceRecord source = category.sources[index];
+                bool isMissing = source != null && missing.Contains(source);
+                if (source != null && source.kind != TextureCategorySourceKind.Folder && !isMissing)
+                    continue;
+
+                displayedRule = true;
                 string currentPath = source == null
                     ? string.Empty
                     : NormalizePath(AssetDatabase.GUIDToAssetPath(source.guid));
@@ -920,36 +1143,327 @@ namespace SleepyCobalt.Tools.TextureTools
                 if (source != null && missing.Contains(source) && !string.IsNullOrEmpty(currentPath))
                     EditorGUILayout.LabelField("    当前资源类型不受支持。", EditorStyles.miniLabel);
             }
+
+            if (!displayedRule)
+                EditorGUILayout.LabelField("没有文件夹规则；单图来源统一显示在当前成员缩略图中。", EditorStyles.miniLabel);
         }
 
-        private void DrawResolvedTextureCategoryMembers(TextureCategoryResolvedRecord resolved)
+        private void DrawTextureCategoryMemberGrid(
+            TextureCategoryProjectSettings settings,
+            TextureCategoryRecord category,
+            TextureCategoryResolvedRecord resolved)
         {
-            const int maxVisibleMembers = 100;
-            int visibleCount = Mathf.Min(maxVisibleMembers, resolved.assetPaths.Count);
-            using (new EditorGUI.IndentLevelScope())
+            HashSet<string> selectedPaths = GetSelectedTextureCategoryMemberPaths(category);
+            PruneSelectedTextureCategoryMemberPaths(selectedPaths, resolved);
+
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField(
+                selectedPaths.Count == 0
+                    ? "点击选择成员，Ctrl/Cmd 多选，Shift 连选"
+                    : "已选择 " + selectedPaths.Count + " 个成员",
+                EditorStyles.miniLabel);
+            if (GUILayout.Button("全选", GUILayout.Width(48f)))
             {
-                for (int index = 0; index < visibleCount; index++)
+                selectedPaths.Clear();
+                selectedPaths.UnionWith(resolved.assetPaths);
+                Repaint();
+            }
+            if (GUILayout.Button("清空选择", GUILayout.Width(64f)))
+            {
+                selectedPaths.Clear();
+                selectedTextureCategoryMemberPaths.Remove(category.id);
+                lastSelectedTextureCategoryMemberPaths.Remove(category.id);
+                Repaint();
+            }
+            using (new EditorGUI.DisabledScope(selectedPaths.Count == 0))
+            {
+                if (GUILayout.Button("移动到", GUILayout.Width(56f)))
                 {
-                    string path = resolved.assetPaths[index];
+                    ShowMoveTextureCategoryMenu(
+                        settings,
+                        category,
+                        new List<string>(selectedPaths));
+                }
+                if (GUILayout.Button("移除", GUILayout.Width(48f)))
+                {
+                    RemoveTextureCategoryMembers(
+                        settings,
+                        category,
+                        new List<string>(selectedPaths));
+                }
+            }
+            EditorGUILayout.EndHorizontal();
+
+            if (resolved.assetPaths.Count == 0)
+            {
+                EditorGUILayout.LabelField("没有可显示的成员。", EditorStyles.miniLabel);
+                return;
+            }
+
+            const float tileWidth = 112f;
+            const float tileHeight = 112f;
+            const float previewSize = 78f;
+            int columnCount = Mathf.Max(1, Mathf.FloorToInt((GetTextureCategoryContentWidth() - 12f) / tileWidth));
+            for (int index = 0; index < resolved.assetPaths.Count; index++)
+            {
+                if (index % columnCount == 0)
                     EditorGUILayout.BeginHorizontal();
-                    using (new EditorGUI.DisabledScope(true))
-                    {
-                        EditorGUILayout.ObjectField(
-                            AssetDatabase.LoadMainAssetAtPath(path),
-                            typeof(UnityEngine.Object),
-                            false);
-                    }
-                    GUILayout.Label(path, EditorStyles.miniLabel, GUILayout.MaxWidth(300f));
+
+                string path = resolved.assetPaths[index];
+                Rect tileRect = GUILayoutUtility.GetRect(
+                    tileWidth,
+                    tileHeight,
+                    GUILayout.Width(tileWidth),
+                    GUILayout.Height(tileHeight));
+
+                if (selectedPaths.Contains(path))
+                    EditorGUI.DrawRect(tileRect, new Color(0.24f, 0.48f, 0.75f, 0.45f));
+                else
+                    GUI.Box(tileRect, GUIContent.none, EditorStyles.helpBox);
+
+                UnityEngine.Object asset = AssetDatabase.LoadMainAssetAtPath(path);
+                Texture2D preview = asset == null ? null : AssetPreview.GetAssetPreview(asset);
+                if (preview == null && asset != null)
+                    preview = AssetPreview.GetMiniThumbnail(asset);
+                Rect previewRect = new Rect(
+                    tileRect.x + (tileRect.width - previewSize) * 0.5f,
+                    tileRect.y + 4f,
+                    previewSize,
+                    previewSize);
+                if (preview != null)
+                    GUI.DrawTexture(previewRect, preview, ScaleMode.ScaleToFit, true);
+
+                GUI.Label(
+                    new Rect(tileRect.x + 4f, tileRect.y + previewSize + 7f, tileRect.width - 8f, 18f),
+                    Path.GetFileName(path),
+                    EditorStyles.centeredGreyMiniLabel);
+
+                Event currentEvent = Event.current;
+                bool actionKey = currentEvent.control || currentEvent.command;
+                bool shiftKey = currentEvent.shift;
+                if (GUI.Button(tileRect, GUIContent.none, GUIStyle.none))
+                    SelectTextureCategoryMember(category, resolved, index, actionKey, shiftKey);
+
+                if (index % columnCount == columnCount - 1 || index == resolved.assetPaths.Count - 1)
                     EditorGUILayout.EndHorizontal();
+            }
+        }
+
+        private HashSet<string> GetSelectedTextureCategoryMemberPaths(TextureCategoryRecord category)
+        {
+            if (category == null || string.IsNullOrEmpty(category.id))
+                return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            if (!selectedTextureCategoryMemberPaths.TryGetValue(category.id, out HashSet<string> selected))
+            {
+                selected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                selectedTextureCategoryMemberPaths.Add(category.id, selected);
+            }
+
+            return selected;
+        }
+
+        private void PruneSelectedTextureCategoryMemberPaths(
+            HashSet<string> selectedPaths,
+            TextureCategoryResolvedRecord resolved)
+        {
+            HashSet<string> validPaths = new HashSet<string>(
+                resolved.assetPaths,
+                StringComparer.OrdinalIgnoreCase);
+            selectedPaths.RemoveWhere(path => !validPaths.Contains(path));
+        }
+
+        private void SelectTextureCategoryMember(
+            TextureCategoryRecord category,
+            TextureCategoryResolvedRecord resolved,
+            int index,
+            bool actionKey,
+            bool shiftKey)
+        {
+            if (category == null || index < 0 || index >= resolved.assetPaths.Count)
+                return;
+
+            HashSet<string> selectedPaths = GetSelectedTextureCategoryMemberPaths(category);
+            string path = resolved.assetPaths[index];
+            lastSelectedTextureCategoryMemberPaths.TryGetValue(
+                category.id,
+                out string lastSelectedPath);
+            if (shiftKey && !string.IsNullOrEmpty(lastSelectedPath))
+            {
+                int anchorIndex = resolved.assetPaths.IndexOf(lastSelectedPath);
+                if (anchorIndex >= 0)
+                {
+                    if (!actionKey)
+                        selectedPaths.Clear();
+                    int start = Mathf.Min(anchorIndex, index);
+                    int end = Mathf.Max(anchorIndex, index);
+                    for (int rangeIndex = start; rangeIndex <= end; rangeIndex++)
+                        selectedPaths.Add(resolved.assetPaths[rangeIndex]);
+                    lastSelectedTextureCategoryMemberPaths[category.id] = path;
+                    Repaint();
+                    return;
                 }
             }
 
-            if (resolved.assetPaths.Count > maxVisibleMembers)
+            if (actionKey)
             {
-                EditorGUILayout.LabelField(
-                    "仅显示前 " + maxVisibleMembers + " 个成员，其余 " +
-                    (resolved.assetPaths.Count - maxVisibleMembers) + " 个仍会正常处理。",
-                    EditorStyles.miniLabel);
+                if (!selectedPaths.Add(path))
+                    selectedPaths.Remove(path);
+            }
+            else
+            {
+                selectedPaths.Clear();
+                selectedPaths.Add(path);
+            }
+
+            lastSelectedTextureCategoryMemberPaths[category.id] = path;
+            Repaint();
+        }
+
+        private void RemoveTextureCategoryMembers(
+            TextureCategoryProjectSettings settings,
+            TextureCategoryRecord category,
+            IList<string> paths)
+        {
+            if (category == null || paths == null || paths.Count == 0)
+                return;
+
+            bool changed = false;
+            foreach (string path in paths)
+            {
+                if (string.IsNullOrEmpty(path))
+                    continue;
+
+                string guid = AssetDatabase.AssetPathToGUID(path);
+                if (string.IsNullOrEmpty(guid))
+                    continue;
+
+                for (int index = category.sources.Count - 1; index >= 0; index--)
+                {
+                    TextureCategorySourceRecord source = category.sources[index];
+                    if (source != null &&
+                        source.kind == TextureCategorySourceKind.Asset &&
+                        source.guid == guid)
+                    {
+                        category.sources.RemoveAt(index);
+                        changed = true;
+                    }
+                }
+
+                if (!category.excludedAssetGuids.Contains(guid))
+                {
+                    category.excludedAssetGuids.Add(guid);
+                    changed = true;
+                }
+            }
+
+            if (!changed)
+                return;
+
+            settings.SaveSettings();
+            MarkTextureCategoryResolutionDirty();
+            if (selectedTextureCategoryMemberPaths.TryGetValue(category.id, out HashSet<string> selectedPaths))
+            {
+                selectedPaths.Clear();
+            }
+            Repaint();
+        }
+
+        private void ShowMoveTextureCategoryMenu(
+            TextureCategoryProjectSettings settings,
+            TextureCategoryRecord sourceCategory,
+            IList<string> paths)
+        {
+            GenericMenu menu = new GenericMenu();
+            bool hasTargetCategory = false;
+            foreach (TextureCategoryRecord category in settings.categories)
+            {
+                if (category == null || category == sourceCategory || string.IsNullOrWhiteSpace(category.name))
+                    continue;
+
+                hasTargetCategory = true;
+                TextureCategoryRecord targetCategory = category;
+                menu.AddItem(
+                    new GUIContent(category.name.Trim()),
+                    false,
+                    () => MoveTextureCategoryMembers(settings, sourceCategory, targetCategory, paths));
+            }
+
+            if (!hasTargetCategory)
+                menu.AddDisabledItem(new GUIContent("没有其他可用分类"));
+            menu.ShowAsContext();
+        }
+
+        private void MoveTextureCategoryMembers(
+            TextureCategoryProjectSettings settings,
+            TextureCategoryRecord sourceCategory,
+            TextureCategoryRecord targetCategory,
+            IList<string> paths)
+        {
+            if (sourceCategory == null || targetCategory == null || paths == null || paths.Count == 0)
+                return;
+
+            sourceCategory.EnsureObjects();
+            targetCategory.EnsureObjects();
+            bool changed = false;
+            List<string> rejected = new List<string>();
+            foreach (string path in paths)
+            {
+                if (!TryCreateTextureCategorySource(path, out TextureCategorySourceRecord source, out string reason) ||
+                    source.kind != TextureCategorySourceKind.Asset)
+                {
+                    rejected.Add(path + "：" + (string.IsNullOrEmpty(reason) ? "不是可移动的单个资源" : reason));
+                    continue;
+                }
+
+                for (int index = sourceCategory.sources.Count - 1; index >= 0; index--)
+                {
+                    TextureCategorySourceRecord existing = sourceCategory.sources[index];
+                    if (existing != null &&
+                        existing.kind == TextureCategorySourceKind.Asset &&
+                        existing.guid == source.guid)
+                    {
+                        sourceCategory.sources.RemoveAt(index);
+                        changed = true;
+                    }
+                }
+
+                if (!sourceCategory.excludedAssetGuids.Contains(source.guid))
+                {
+                    sourceCategory.excludedAssetGuids.Add(source.guid);
+                    changed = true;
+                }
+
+                if (targetCategory.excludedAssetGuids.Remove(source.guid))
+                    changed = true;
+
+                bool targetHasSource = targetCategory.sources.Exists(existing =>
+                    existing != null &&
+                    existing.kind == TextureCategorySourceKind.Asset &&
+                    existing.guid == source.guid);
+                if (!targetHasSource)
+                {
+                    targetCategory.sources.Add(source);
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                settings.SaveSettings();
+                MarkTextureCategoryResolutionDirty();
+                if (selectedTextureCategoryMemberPaths.TryGetValue(sourceCategory.id, out HashSet<string> selectedPaths))
+                    selectedPaths.Clear();
+                Repaint();
+            }
+
+            if (rejected.Count > 0)
+            {
+                int displayCount = Mathf.Min(5, rejected.Count);
+                EditorUtility.DisplayDialog(
+                    "部分资源未移动",
+                    string.Join("\n", rejected.GetRange(0, displayCount).ToArray()),
+                    "确定");
             }
         }
 
