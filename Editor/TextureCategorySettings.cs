@@ -1,7 +1,9 @@
 #if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
+using System.IO;
 using UnityEditor;
+using UnityEngine;
 
 namespace SleepyCobalt.Tools.TextureTools
 {
@@ -89,10 +91,10 @@ namespace SleepyCobalt.Tools.TextureTools
     [FilePath("ProjectSettings/CobaltTextureCategories.asset", FilePathAttribute.Location.ProjectFolder)]
     internal sealed class TextureCategoryProjectSettings : ScriptableSingleton<TextureCategoryProjectSettings>
     {
-        public int version = 1;
-        public List<TextureCategoryRecord> categories = new List<TextureCategoryRecord>();
-        public List<TextureCategorySourceRecord> classificationSources = new List<TextureCategorySourceRecord>();
-        public List<TextureCategorySourceRecord> ignoredSources = new List<TextureCategorySourceRecord>();
+        [SerializeField] public int version = 1;
+        [SerializeField] public List<TextureCategoryRecord> categories = new List<TextureCategoryRecord>();
+        [SerializeField] public List<TextureCategorySourceRecord> classificationSources = new List<TextureCategorySourceRecord>();
+        [SerializeField] public List<TextureCategorySourceRecord> ignoredSources = new List<TextureCategorySourceRecord>();
 
         internal bool EnsureIntegrity()
         {
@@ -208,6 +210,10 @@ namespace SleepyCobalt.Tools.TextureTools
 
         internal void SaveSettings()
         {
+            string filePath = GetFilePath();
+            string directory = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+                Directory.CreateDirectory(directory);
             Save(true);
         }
     }
