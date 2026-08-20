@@ -107,7 +107,7 @@ namespace SleepyCobalt.Tools.TextureTools
                 true);
             EditorGUILayout.LabelField("贴图分组", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
-                "创建分类并拖入 Unity 的 TextureImporter Preset 资源。可从 Project 窗口拖入图片或文件夹；" +
+                "创建分组并拖入 Unity 的 TextureImporter Preset 资源。可从 Project 窗口拖入图片或文件夹；" +
                 "文件夹会递归包含以后新增的资源。设置只会在点击应用按钮后写入。",
                 MessageType.Info);
 
@@ -120,14 +120,14 @@ namespace SleepyCobalt.Tools.TextureTools
             {
                 EditorGUILayout.HelpBox(
                     "检测到 " + textureCategoryResolution.conflictAssetCount +
-                    " 个资源同时属于多个分类。请先移除重叠来源，再应用全部分类。",
+                    " 个资源同时属于多个分组。请先移除重叠来源，再应用全部分组。",
                     MessageType.Error);
             }
 
             if (settings.categories.Count == 0)
             {
                 EditorGUILayout.HelpBox(
-                    "还没有分类。点击“新建分类”，拖入 TextureImporter Preset 后把图片或文件夹拖入分类。",
+                    "还没有分组。点击“新建分组”，拖入 TextureImporter Preset 后把图片或文件夹拖入分组。",
                     MessageType.None);
             }
 
@@ -174,12 +174,12 @@ namespace SleepyCobalt.Tools.TextureTools
             {
                 EditorGUILayout.HelpBox(
                     "待分组范围内还有 " + textureCategoryResolution.ungroupedTextureCount +
-                    " 张图片未加入任何分类，也没有被忽略。",
+                    " 张图片未加入任何分组，也没有被忽略。",
                     MessageType.Warning);
             }
             else
             {
-                EditorGUILayout.HelpBox("待分组范围内的图片都已分类或忽略。", MessageType.Info);
+                EditorGUILayout.HelpBox("待分组范围内的图片都已分组或忽略。", MessageType.Info);
             }
 
             showUngroupedTextures = EditorGUILayout.Foldout(
@@ -234,7 +234,7 @@ namespace SleepyCobalt.Tools.TextureTools
             }
             using (new EditorGUI.DisabledScope(visibleSelectedCount == 0))
             {
-                if (GUILayout.Button("加入分类…", GUILayout.Width(72f)))
+                if (GUILayout.Button("加入分组…", GUILayout.Width(72f)))
                     ShowAddUngroupedTextureMenu(settings, GetSelectedUngroupedAssetPaths(visibleUngroupedPaths));
                 if (GUILayout.Button("忽略", GUILayout.Width(48f)))
                     AddIgnoredUngroupedTextures(settings, GetSelectedUngroupedAssetPaths(visibleUngroupedPaths));
@@ -636,14 +636,14 @@ namespace SleepyCobalt.Tools.TextureTools
                     hasCategory = true;
                     TextureCategoryRecord targetCategory = category;
                     menu.AddItem(
-                        new GUIContent("加入分类/" + targetCategory.name.Trim()),
+                        new GUIContent("加入分组/" + targetCategory.name.Trim()),
                         false,
                         () => AddUngroupedTexturesToCategory(settings, targetCategory, paths));
                 }
             }
 
             if (!hasCategory)
-                menu.AddDisabledItem(new GUIContent("加入分类/请先新建分类"));
+                menu.AddDisabledItem(new GUIContent("加入分组/请先新建分组"));
         }
 
         private List<string> PrepareUngroupedContextActionPaths(string path)
@@ -906,7 +906,7 @@ namespace SleepyCobalt.Tools.TextureTools
             }
 
             if (!hasCategory)
-                menu.AddDisabledItem(new GUIContent("请先新建分类"));
+                menu.AddDisabledItem(new GUIContent("请先新建分组"));
             menu.ShowAsContext();
         }
 
@@ -954,7 +954,7 @@ namespace SleepyCobalt.Tools.TextureTools
             {
                 int displayCount = Mathf.Min(5, rejected.Count);
                 EditorUtility.DisplayDialog(
-                    "部分资源未加入分类",
+                    "部分资源未加入分组",
                     string.Join("\n", rejected.GetRange(0, displayCount).ToArray()),
                     "确定");
             }
@@ -1134,7 +1134,7 @@ namespace SleepyCobalt.Tools.TextureTools
                 buttonWidth,
                 toolbarRect.height);
 
-            if (GUI.Button(createRect, "新建分类"))
+            if (GUI.Button(createRect, "新建分组"))
             {
                 settings.categories.Add(new TextureCategoryRecord
                 {
@@ -1146,13 +1146,13 @@ namespace SleepyCobalt.Tools.TextureTools
                 MarkTextureCategoryResolutionDirty();
             }
 
-            if (GUI.Button(refreshRect, "刷新成员"))
+            if (GUI.Button(refreshRect, "刷新分组成员"))
                 MarkTextureCategoryResolutionDirty();
 
             EnsureTextureCategoryResolution(settings);
             using (new EditorGUI.DisabledScope(!CanApplyAllTextureCategories(settings)))
             {
-                if (GUI.Button(applyRect, "应用全部分类"))
+                if (GUI.Button(applyRect, "应用全部分组"))
                     ApplyAllTextureCategories(settings);
             }
 
@@ -1172,7 +1172,7 @@ namespace SleepyCobalt.Tools.TextureTools
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.BeginHorizontal();
 
-            string title = string.IsNullOrWhiteSpace(category.name) ? "未命名分类" : category.name.Trim();
+            string title = string.IsNullOrWhiteSpace(category.name) ? "未命名分组" : category.name.Trim();
             bool expanded = EditorGUILayout.Foldout(category.expanded, title, true, EditorStyles.foldoutHeader);
             if (expanded != category.expanded)
             {
@@ -1184,8 +1184,8 @@ namespace SleepyCobalt.Tools.TextureTools
             EditorGUILayout.EndHorizontal();
 
             if (deleteRequested && EditorUtility.DisplayDialog(
-                    "删除贴图分类",
-                    "确定删除分类“" + title + "”？这不会修改或删除任何图片资源。",
+                    "删除贴图分组",
+                    "确定删除分组“" + title + "”？这不会修改或删除任何图片资源。",
                     "删除",
                     "取消"))
             {
@@ -1200,7 +1200,7 @@ namespace SleepyCobalt.Tools.TextureTools
             }
 
             EditorGUI.BeginChangeCheck();
-            category.name = EditorGUILayout.DelayedTextField("分类名称", category.name ?? string.Empty);
+            category.name = EditorGUILayout.DelayedTextField("分组名称", category.name ?? string.Empty);
             if (EditorGUI.EndChangeCheck())
                 settings.SaveSettings();
 
@@ -1230,7 +1230,7 @@ namespace SleepyCobalt.Tools.TextureTools
             bool canApply = CanApplyTextureCategory(settings, category, resolved);
             using (new EditorGUI.DisabledScope(!canApply))
             {
-                if (GUILayout.Button("应用此分类", GUILayout.Height(32f)))
+                if (GUILayout.Button("应用此分组", GUILayout.Height(32f)))
                     ApplySingleTextureCategory(category, resolved);
             }
 
@@ -1351,7 +1351,7 @@ namespace SleepyCobalt.Tools.TextureTools
             {
                 int displayCount = Mathf.Min(5, rejected.Count);
                 EditorUtility.DisplayDialog(
-                    "部分资源未加入分类",
+                    "部分资源未加入分组",
                     string.Join("\n", rejected.GetRange(0, displayCount).ToArray()) +
                     (rejected.Count > displayCount ? "\n……以及另外 " + (rejected.Count - displayCount) + " 个" : string.Empty),
                     "确定");
@@ -1701,7 +1701,7 @@ namespace SleepyCobalt.Tools.TextureTools
             }
 
             if (!hasTargetCategory)
-                menu.AddDisabledItem(new GUIContent("移动到/没有其他可用分类"));
+                menu.AddDisabledItem(new GUIContent("移动到/没有其他可用分组"));
         }
 
         private List<string> PrepareTextureCategoryContextActionPaths(
@@ -1847,7 +1847,7 @@ namespace SleepyCobalt.Tools.TextureTools
             }
 
             if (!hasTargetCategory)
-                menu.AddDisabledItem(new GUIContent("没有其他可用分类"));
+                menu.AddDisabledItem(new GUIContent("没有其他可用分组"));
             menu.ShowAsContext();
         }
 
@@ -1938,7 +1938,7 @@ namespace SleepyCobalt.Tools.TextureTools
                 lines.Add("……以及另外 " + (resolved.conflictPaths.Count - displayCount) + " 个冲突资源");
 
             EditorGUILayout.HelpBox(
-                "此分类包含冲突资源，应用已禁用：\n" + string.Join("\n", lines.ToArray()),
+                "此分组包含冲突资源，应用已禁用：\n" + string.Join("\n", lines.ToArray()),
                 MessageType.Error);
         }
 
@@ -1948,7 +1948,7 @@ namespace SleepyCobalt.Tools.TextureTools
             foreach (TextureCategoryResolvedRecord resolved in textureCategoryResolution.categories)
             {
                 if (resolved.assetPaths.Contains(path))
-                    owners.Add(string.IsNullOrWhiteSpace(resolved.category.name) ? "未命名分类" : resolved.category.name.Trim());
+                    owners.Add(string.IsNullOrWhiteSpace(resolved.category.name) ? "未命名分组" : resolved.category.name.Trim());
             }
 
             return owners;
@@ -1962,7 +1962,7 @@ namespace SleepyCobalt.Tools.TextureTools
             string normalized = category == null || category.name == null ? string.Empty : category.name.Trim();
             if (string.IsNullOrEmpty(normalized))
             {
-                error = "分类名称不能为空。";
+                error = "分组名称不能为空。";
                 return false;
             }
 
@@ -1980,7 +1980,7 @@ namespace SleepyCobalt.Tools.TextureTools
 
             if (matchCount > 1)
             {
-                error = "分类名称不能与其他分类重复。";
+                error = "分组名称不能与其他分组重复。";
                 return false;
             }
 
@@ -2028,15 +2028,15 @@ namespace SleepyCobalt.Tools.TextureTools
         {
             TextureCategoryApplyJob job = CreateTextureCategoryApplyJob(category, resolved);
             bool confirmed = EditorUtility.DisplayDialog(
-                "应用贴图分类",
-                "分类：“" + job.categoryName + "”\n" +
+                "应用贴图分组",
+                "分组：“" + job.categoryName + "”\n" +
                 "即将应用 TextureImporter Preset 到 " + resolved.textureCount + " 张图片。",
                 "应用",
                 "取消");
             if (!confirmed)
                 return;
 
-            ApplyTextureCategoryJobs(new List<TextureCategoryApplyJob> { job }, "应用贴图分类");
+            ApplyTextureCategoryJobs(new List<TextureCategoryApplyJob> { job }, "应用贴图分组");
         }
 
         private void ApplyAllTextureCategories(TextureCategoryProjectSettings settings)
@@ -2058,12 +2058,12 @@ namespace SleepyCobalt.Tools.TextureTools
             }
 
             string confirmation =
-                "即将把各分类的 TextureImporter Preset 应用到 " + textureCount + " 张图片。";
+                "即将把各分组的 TextureImporter Preset 应用到 " + textureCount + " 张图片。";
 
-            if (!EditorUtility.DisplayDialog("应用全部贴图分类", confirmation, "应用全部", "取消"))
+            if (!EditorUtility.DisplayDialog("应用全部贴图分组", confirmation, "应用全部", "取消"))
                 return;
 
-            ApplyTextureCategoryJobs(jobs, "应用全部贴图分类");
+            ApplyTextureCategoryJobs(jobs, "应用全部贴图分组");
         }
 
         private TextureCategoryApplyJob CreateTextureCategoryApplyJob(
@@ -2176,7 +2176,7 @@ namespace SleepyCobalt.Tools.TextureTools
 
         private static string GenerateUniqueTextureCategoryName(IList<TextureCategoryRecord> categories)
         {
-            const string baseName = "新分类";
+            const string baseName = "新分组";
             HashSet<string> names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (TextureCategoryRecord category in categories)
             {
