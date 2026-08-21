@@ -81,13 +81,8 @@ namespace SleepyCobalt.Tools.TextureTools
         private const string TextureCategoryReorderKey =
             "SleepyCobalt.TextureCategoryReorder";
 
-        private sealed class TextureCategoryCardLayout
-        {
-            internal Rect cardRect;
-        }
-
-        private readonly List<TextureCategoryCardLayout> textureCategoryCardLayouts =
-            new List<TextureCategoryCardLayout>();
+        private readonly List<Rect> textureCategoryCardScreenRects =
+            new List<Rect>();
         private string pendingTextureCategoryReorderId;
         private int pendingTextureCategoryReorderIndex = -1;
         private int textureCategoryReorderDropIndex = -1;
@@ -116,7 +111,7 @@ namespace SleepyCobalt.Tools.TextureTools
         {
             EditorApplication.projectChanged -= OnTextureCategoryProjectChanged;
             ClearTextureCategoryReorderState();
-            textureCategoryCardLayouts.Clear();
+            textureCategoryCardScreenRects.Clear();
         }
 
         private void OnTextureCategoryProjectChanged()
@@ -170,7 +165,7 @@ namespace SleepyCobalt.Tools.TextureTools
                     MessageType.None);
             }
 
-            textureCategoryCardLayouts.Clear();
+            textureCategoryCardScreenRects.Clear();
             for (int index = 0; index < settings.categories.Count; index++)
             {
                 TextureCategoryRecord category = settings.categories[index];
@@ -183,10 +178,7 @@ namespace SleepyCobalt.Tools.TextureTools
                     out Rect cardRect);
                 if (!deleteRequested)
                 {
-                    textureCategoryCardLayouts.Add(new TextureCategoryCardLayout
-                    {
-                        cardRect = cardRect
-                    });
+                    textureCategoryCardScreenRects.Add(ConvertTextureCategoryGuiRectToScreenRect(cardRect));
                     continue;
                 }
 
@@ -258,19 +250,29 @@ namespace SleepyCobalt.Tools.TextureTools
             if (GUILayout.Button("清除", GUILayout.Width(48f)))
             {
                 ungroupedSearchText = string.Empty;
+                ungroupedQuickSearch = TextureCategoryQuickSearch.None;
+                ungroupedMaxTextureSizeFilter = NoMaxTextureSizeFilter;
                 visibleUngroupedPaths = GetFilteredUngroupedAssetPaths();
                 Repaint();
             }
             if (GUILayout.Button(
-                    GetQuickSearchButtonLabel(ungroupedQuickSearch, ungroupedMaxTextureSizeFilter),
-                    GUILayout.Width(88f)))
-                ShowQuickSearchMenu(
+                    GetQuickSearchTypeButtonLabel(ungroupedQuickSearch),
+                    GUILayout.Width(92f)))
+                ShowTextureTypeQuickSearchMenu(
                     ungroupedQuickSearch,
-                    ungroupedMaxTextureSizeFilter,
-                    (selected, selectedMaxTextureSize) =>
+                    selected =>
                 {
                     ungroupedQuickSearch = selected;
-                    ungroupedMaxTextureSizeFilter = selectedMaxTextureSize;
+                    Repaint();
+                });
+            if (GUILayout.Button(
+                    GetMaxTextureSizeButtonLabel(ungroupedMaxTextureSizeFilter),
+                    GUILayout.Width(96f)))
+                ShowMaxTextureSizeQuickSearchMenu(
+                    ungroupedMaxTextureSizeFilter,
+                    selected =>
+                {
+                    ungroupedMaxTextureSizeFilter = selected;
                     Repaint();
                 });
             EditorGUILayout.EndHorizontal();
@@ -631,34 +633,35 @@ namespace SleepyCobalt.Tools.TextureTools
             return info;
         }
 
-        private static string GetQuickSearchButtonLabel(
-            TextureCategoryQuickSearch quickSearch,
-            int maxTextureSize)
+        private static string GetQuickSearchTypeButtonLabel(TextureCategoryQuickSearch quickSearch)
         {
-            string typeLabel = GetQuickSearchButtonTypeLabel(quickSearch);
-            if (maxTextureSize != NoMaxTextureSizeFilter)
-                return quickSearch == TextureCategoryQuickSearch.None
-                    ? "Max " + maxTextureSize
-                    : typeLabel + " / " + maxTextureSize;
-
-            return quickSearch == TextureCategoryQuickSearch.None ? "不限快捷条件" : typeLabel;
-        }
-
-        private static string GetQuickSearchButtonTypeLabel(TextureCategoryQuickSearch quickSearch)
-        {
+            string label;
             switch (quickSearch)
             {
                 case TextureCategoryQuickSearch.Sprite:
-                    return "Sprite";
+                    label = "Sprite";
+                    break;
                 case TextureCategoryQuickSearch.Normal:
-                    return "Normal";
+                    label = "Normal";
+                    break;
                 case TextureCategoryQuickSearch.Transparency:
-                    return "透明";
+                    label = "透明";
+                    break;
                 case TextureCategoryQuickSearch.Alpha:
-                    return "Alpha";
+                    label = "Alpha";
+                    break;
                 default:
-                    return "不限快捷条件";
+                    return "类型";
             }
+
+            return "类型: " + label;
+        }
+
+        private static string GetMaxTextureSizeButtonLabel(int maxTextureSize)
+        {
+            return maxTextureSize == NoMaxTextureSizeFilter
+                ? "最大尺寸"
+                : "最大尺寸: " + maxTextureSize;
         }
 
         private static string GetQuickSearchMenuLabel(TextureCategoryQuickSearch quickSearch)
@@ -678,51 +681,54 @@ namespace SleepyCobalt.Tools.TextureTools
             }
         }
 
-        private static void ShowQuickSearchMenu(
+        private static void ShowTextureTypeQuickSearchMenu(
             TextureCategoryQuickSearch currentSearch,
-            int currentMaxTextureSize,
-            Action<TextureCategoryQuickSearch, int> onSelected)
+            Action<TextureCategoryQuickSearch> onSelected)
         {
             GenericMenu menu = new GenericMenu();
-            AddQuickSearchMenuItem(menu, currentSearch, currentMaxTextureSize, TextureCategoryQuickSearch.None, onSelected);
-            AddQuickSearchMenuItem(menu, currentSearch, currentMaxTextureSize, TextureCategoryQuickSearch.Sprite, onSelected);
-            AddQuickSearchMenuItem(menu, currentSearch, currentMaxTextureSize, TextureCategoryQuickSearch.Normal, onSelected);
-            AddQuickSearchMenuItem(menu, currentSearch, currentMaxTextureSize, TextureCategoryQuickSearch.Transparency, onSelected);
-            AddQuickSearchMenuItem(menu, currentSearch, currentMaxTextureSize, TextureCategoryQuickSearch.Alpha, onSelected);
+            AddTextureTypeQuickSearchMenuItem(menu, currentSearch, TextureCategoryQuickSearch.None, onSelected);
+            AddTextureTypeQuickSearchMenuItem(menu, currentSearch, TextureCategoryQuickSearch.Sprite, onSelected);
+            AddTextureTypeQuickSearchMenuItem(menu, currentSearch, TextureCategoryQuickSearch.Normal, onSelected);
+            AddTextureTypeQuickSearchMenuItem(menu, currentSearch, TextureCategoryQuickSearch.Transparency, onSelected);
+            AddTextureTypeQuickSearchMenuItem(menu, currentSearch, TextureCategoryQuickSearch.Alpha, onSelected);
+            menu.ShowAsContext();
+        }
 
-            menu.AddSeparator(string.Empty);
-            AddMaxTextureSizeMenuItem(menu, currentSearch, currentMaxTextureSize, NoMaxTextureSizeFilter, onSelected);
+        private static void AddTextureTypeQuickSearchMenuItem(
+            GenericMenu menu,
+            TextureCategoryQuickSearch currentSearch,
+            TextureCategoryQuickSearch quickSearch,
+            Action<TextureCategoryQuickSearch> onSelected)
+        {
+            menu.AddItem(
+                new GUIContent(GetQuickSearchMenuLabel(quickSearch)),
+                quickSearch == currentSearch,
+                () => onSelected(quickSearch));
+        }
+
+        private static void ShowMaxTextureSizeQuickSearchMenu(
+            int currentMaxTextureSize,
+            Action<int> onSelected)
+        {
+            GenericMenu menu = new GenericMenu();
+            AddMaxTextureSizeMenuItem(menu, currentMaxTextureSize, NoMaxTextureSizeFilter, onSelected);
             foreach (int maxTextureSize in DefaultMaxTextureSizeOptions)
-                AddMaxTextureSizeMenuItem(menu, currentSearch, currentMaxTextureSize, maxTextureSize, onSelected);
+                AddMaxTextureSizeMenuItem(menu, currentMaxTextureSize, maxTextureSize, onSelected);
 
             menu.ShowAsContext();
         }
 
-        private static void AddQuickSearchMenuItem(
-            GenericMenu menu,
-            TextureCategoryQuickSearch currentSearch,
-            int currentMaxTextureSize,
-            TextureCategoryQuickSearch quickSearch,
-            Action<TextureCategoryQuickSearch, int> onSelected)
-        {
-            menu.AddItem(
-                new GUIContent("类型/" + GetQuickSearchMenuLabel(quickSearch)),
-                quickSearch == currentSearch,
-                () => onSelected(quickSearch, currentMaxTextureSize));
-        }
-
         private static void AddMaxTextureSizeMenuItem(
             GenericMenu menu,
-            TextureCategoryQuickSearch currentSearch,
             int currentMaxTextureSize,
             int maxTextureSize,
-            Action<TextureCategoryQuickSearch, int> onSelected)
+            Action<int> onSelected)
         {
             string label = maxTextureSize == NoMaxTextureSizeFilter ? "不限" : maxTextureSize.ToString();
             menu.AddItem(
-                new GUIContent("Max Size/" + label),
+                new GUIContent(label),
                 maxTextureSize == currentMaxTextureSize,
-                () => onSelected(currentSearch, maxTextureSize));
+                () => onSelected(maxTextureSize));
         }
 
         private void ShowUngroupedAssetContextMenu(
@@ -1506,7 +1512,6 @@ namespace SleepyCobalt.Tools.TextureTools
             if (currentEvent.type == EventType.DragUpdated)
             {
                 textureCategoryReorderDropIndex = CalculateTextureCategoryReorderDropIndex(
-                    settings.categories.Count,
                     currentEvent.mousePosition);
                 DragAndDrop.visualMode = DragAndDropVisualMode.Move;
                 currentEvent.Use();
@@ -1514,6 +1519,12 @@ namespace SleepyCobalt.Tools.TextureTools
             }
             else if (currentEvent.type == EventType.DragPerform)
             {
+                if (textureCategoryReorderDropIndex < 0)
+                {
+                    textureCategoryReorderDropIndex = CalculateTextureCategoryReorderDropIndex(
+                        currentEvent.mousePosition);
+                }
+
                 DragAndDrop.visualMode = DragAndDropVisualMode.Move;
                 DragAndDrop.AcceptDrag();
                 CompleteTextureCategoryReorder(settings, categoryId, sourceIndex);
@@ -1521,15 +1532,28 @@ namespace SleepyCobalt.Tools.TextureTools
             }
         }
 
-        private int CalculateTextureCategoryReorderDropIndex(int categoryCount, Vector2 mousePosition)
+        private int CalculateTextureCategoryReorderDropIndex(Vector2 mousePosition)
         {
-            for (int index = 0; index < textureCategoryCardLayouts.Count; index++)
+            Vector2 mouseScreenPosition = GUIUtility.GUIToScreenPoint(mousePosition);
+            return GetTextureCategoryReorderInsertionSlot(
+                mouseScreenPosition.y,
+                textureCategoryCardScreenRects);
+        }
+
+        private static int GetTextureCategoryReorderInsertionSlot(
+            float mouseY,
+            IList<Rect> cardRects)
+        {
+            if (cardRects == null)
+                return 0;
+
+            for (int index = 0; index < cardRects.Count; index++)
             {
-                if (mousePosition.y < textureCategoryCardLayouts[index].cardRect.center.y)
+                if (mouseY < cardRects[index].center.y)
                     return index;
             }
 
-            return categoryCount;
+            return cardRects.Count;
         }
 
         private static int FindTextureCategoryIndex(
@@ -1556,27 +1580,66 @@ namespace SleepyCobalt.Tools.TextureTools
             string categoryId,
             int sourceIndex)
         {
-            int insertIndex = Mathf.Clamp(
-                textureCategoryReorderDropIndex,
-                0,
-                settings.categories.Count);
-            if (sourceIndex < insertIndex)
-                insertIndex--;
-
-            if (insertIndex != sourceIndex && insertIndex >= 0 && insertIndex < settings.categories.Count)
+            if (sourceIndex >= 0 && sourceIndex < settings.categories.Count)
             {
                 TextureCategoryRecord category = settings.categories[sourceIndex];
                 if (category != null && string.Equals(category.id, categoryId, StringComparison.Ordinal))
                 {
-                    settings.categories.RemoveAt(sourceIndex);
-                    settings.categories.Insert(insertIndex, category);
-                    settings.SaveSettings();
-                    MarkTextureCategoryResolutionDirty();
+                    bool changed = MoveTextureCategoryToInsertionSlot(
+                        settings.categories,
+                        sourceIndex,
+                        textureCategoryReorderDropIndex);
+                    if (changed)
+                    {
+                        settings.SaveSettings();
+                        MarkTextureCategoryResolutionDirty();
+                    }
                 }
             }
 
             ClearTextureCategoryReorderState();
             Repaint();
+        }
+
+        private static int GetTextureCategoryReorderInsertIndex(
+            int targetSlot,
+            int sourceIndex,
+            int categoryCount)
+        {
+            if (categoryCount <= 0)
+                return 0;
+
+            int clampedSlot = Math.Max(0, Math.Min(targetSlot, categoryCount));
+            if (clampedSlot > sourceIndex)
+                clampedSlot--;
+
+            return Math.Max(0, Math.Min(clampedSlot, categoryCount - 1));
+        }
+
+        private static bool MoveTextureCategoryToInsertionSlot(
+            IList<TextureCategoryRecord> categories,
+            int sourceIndex,
+            int targetSlot)
+        {
+            if (categories == null ||
+                sourceIndex < 0 ||
+                sourceIndex >= categories.Count ||
+                categories[sourceIndex] == null)
+            {
+                return false;
+            }
+
+            int insertIndex = GetTextureCategoryReorderInsertIndex(
+                targetSlot,
+                sourceIndex,
+                categories.Count);
+            if (insertIndex == sourceIndex)
+                return false;
+
+            TextureCategoryRecord category = categories[sourceIndex];
+            categories.RemoveAt(sourceIndex);
+            categories.Insert(insertIndex, category);
+            return true;
         }
 
         private void ClearTextureCategoryReorderState()
@@ -1592,26 +1655,45 @@ namespace SleepyCobalt.Tools.TextureTools
             if (Event.current.type != EventType.Repaint ||
                 !IsTextureCategoryReorderDrag() ||
                 textureCategoryReorderDropIndex < 0 ||
-                textureCategoryCardLayouts.Count == 0)
+                textureCategoryCardScreenRects.Count == 0)
             {
                 return;
             }
 
-            Rect targetRect;
-            if (textureCategoryReorderDropIndex < textureCategoryCardLayouts.Count)
+            int insertionSlot = Mathf.Clamp(
+                textureCategoryReorderDropIndex,
+                0,
+                textureCategoryCardScreenRects.Count);
+            Rect targetScreenRect;
+            if (insertionSlot < textureCategoryCardScreenRects.Count)
             {
-                targetRect = textureCategoryCardLayouts[textureCategoryReorderDropIndex].cardRect;
-                targetRect.y -= 3f;
+                targetScreenRect = textureCategoryCardScreenRects[insertionSlot];
+                targetScreenRect.y -= 3f;
             }
             else
             {
-                targetRect = textureCategoryCardLayouts[textureCategoryCardLayouts.Count - 1].cardRect;
-                targetRect.y = targetRect.yMax + 3f;
+                targetScreenRect = textureCategoryCardScreenRects[textureCategoryCardScreenRects.Count - 1];
+                targetScreenRect.y = targetScreenRect.yMax + 3f;
             }
 
+            Rect targetGuiRect = ConvertTextureCategoryScreenRectToGuiRect(targetScreenRect);
             EditorGUI.DrawRect(
-                new Rect(targetRect.x, targetRect.y, targetRect.width, 2f),
+                new Rect(targetGuiRect.x, targetGuiRect.y, targetGuiRect.width, 2f),
                 new Color(0.24f, 0.58f, 0.95f, 0.95f));
+        }
+
+        private static Rect ConvertTextureCategoryGuiRectToScreenRect(Rect guiRect)
+        {
+            Vector2 screenMin = GUIUtility.GUIToScreenPoint(guiRect.min);
+            Vector2 screenMax = GUIUtility.GUIToScreenPoint(guiRect.max);
+            return Rect.MinMaxRect(screenMin.x, screenMin.y, screenMax.x, screenMax.y);
+        }
+
+        private static Rect ConvertTextureCategoryScreenRectToGuiRect(Rect screenRect)
+        {
+            Vector2 guiMin = GUIUtility.ScreenToGUIPoint(screenRect.min);
+            Vector2 guiMax = GUIUtility.ScreenToGUIPoint(screenRect.max);
+            return Rect.MinMaxRect(guiMin.x, guiMin.y, guiMax.x, guiMax.y);
         }
 
         private void DrawTextureCategoryPresetField(
@@ -1964,7 +2046,11 @@ namespace SleepyCobalt.Tools.TextureTools
             if (GUILayout.Button("清除", GUILayout.Width(48f)))
             {
                 if (category != null && !string.IsNullOrEmpty(category.id))
+                {
                     textureCategoryMemberSearchTexts.Remove(category.id);
+                    textureCategoryMemberQuickSearches.Remove(category.id);
+                    textureCategoryMemberMaxTextureSizeFilters.Remove(category.id);
+                }
                 Repaint();
             }
             TextureCategoryQuickSearch quickSearch = TextureCategoryQuickSearch.None;
@@ -1979,20 +2065,30 @@ namespace SleepyCobalt.Tools.TextureTools
             }
 
             if (GUILayout.Button(
-                    GetQuickSearchButtonLabel(quickSearch, maxTextureSizeFilter),
-                    GUILayout.Width(88f)))
+                    GetQuickSearchTypeButtonLabel(quickSearch),
+                    GUILayout.Width(92f)))
             {
                 TextureCategoryRecord targetCategory = category;
-                ShowQuickSearchMenu(
+                ShowTextureTypeQuickSearchMenu(
                     quickSearch,
-                    maxTextureSizeFilter,
-                    (selected, selectedMaxTextureSize) =>
+                    selected =>
                 {
                     if (targetCategory != null && !string.IsNullOrEmpty(targetCategory.id))
-                    {
                         textureCategoryMemberQuickSearches[targetCategory.id] = selected;
-                        textureCategoryMemberMaxTextureSizeFilters[targetCategory.id] = selectedMaxTextureSize;
-                    }
+                    Repaint();
+                });
+            }
+            if (GUILayout.Button(
+                    GetMaxTextureSizeButtonLabel(maxTextureSizeFilter),
+                    GUILayout.Width(96f)))
+            {
+                TextureCategoryRecord targetCategory = category;
+                ShowMaxTextureSizeQuickSearchMenu(
+                    maxTextureSizeFilter,
+                    selected =>
+                {
+                    if (targetCategory != null && !string.IsNullOrEmpty(targetCategory.id))
+                        textureCategoryMemberMaxTextureSizeFilters[targetCategory.id] = selected;
                     Repaint();
                 });
             }
