@@ -78,14 +78,18 @@ namespace SleepyCobalt.Tools.TextureTools
             internal Preset textureImporterPreset;
         }
 
-        private const string TextureCategoryReorderKey =
-            "SleepyCobalt.TextureCategoryReorder";
+        private const bool DebugTextureCategoryReorder = false;
 
-        private readonly List<Rect> textureCategoryCardScreenRects =
+        private readonly List<Rect> textureCategoryCardRects =
             new List<Rect>();
-        private string pendingTextureCategoryReorderId;
-        private int pendingTextureCategoryReorderIndex = -1;
-        private int textureCategoryReorderDropIndex = -1;
+        private string draggedTextureCategoryId;
+        private int draggedTextureCategorySourceIndex = -1;
+        private int draggedTextureCategoryTargetSlot = -1;
+        private bool isTextureCategoryReordering;
+        private Vector2 textureCategoryDragStartMousePosition;
+        private int textureCategoryReorderControlId;
+        private bool textureCategoryReorderDragEventThisPass;
+        private bool textureCategoryReorderMouseUpEventThisPass;
 
         private void OnEnable()
         {
@@ -111,7 +115,7 @@ namespace SleepyCobalt.Tools.TextureTools
         {
             EditorApplication.projectChanged -= OnTextureCategoryProjectChanged;
             ClearTextureCategoryReorderState();
-            textureCategoryCardScreenRects.Clear();
+            textureCategoryCardRects.Clear();
         }
 
         private void OnTextureCategoryProjectChanged()
@@ -148,7 +152,6 @@ namespace SleepyCobalt.Tools.TextureTools
             DrawTextureClassificationScope(settings);
             DrawUngroupedTextureSection(settings);
             DrawIgnoredTextureRules(settings);
-            HandleTextureCategoryReorderDrag(settings);
 
             if (textureCategoryResolution.HasConflicts)
             {
@@ -165,7 +168,9 @@ namespace SleepyCobalt.Tools.TextureTools
                     MessageType.None);
             }
 
-            textureCategoryCardScreenRects.Clear();
+            textureCategoryReorderDragEventThisPass = false;
+            textureCategoryReorderMouseUpEventThisPass = false;
+            textureCategoryCardRects.Clear();
             for (int index = 0; index < settings.categories.Count; index++)
             {
                 TextureCategoryRecord category = settings.categories[index];
@@ -178,7 +183,7 @@ namespace SleepyCobalt.Tools.TextureTools
                     out Rect cardRect);
                 if (!deleteRequested)
                 {
-                    textureCategoryCardScreenRects.Add(ConvertTextureCategoryGuiRectToScreenRect(cardRect));
+                    textureCategoryCardRects.Add(cardRect);
                     continue;
                 }
 
@@ -189,7 +194,12 @@ namespace SleepyCobalt.Tools.TextureTools
                 break;
             }
 
+            UpdateTextureCategoryReorderTargetSlotForCurrentPass(settings.categories.Count);
+            if (textureCategoryReorderMouseUpEventThisPass)
+                CompleteTextureCategoryReorder(settings);
+
             DrawTextureCategoryReorderInsertionLine();
+            DrawTextureCategoryReorderDebugInfo(settings.categories.Count);
 
             EditorGUILayout.EndVertical();
             EditorGUILayout.EndScrollView();
@@ -882,13 +892,11 @@ namespace SleepyCobalt.Tools.TextureTools
 
         private void DrawTextureClassificationDropArea(TextureCategoryProjectSettings settings)
         {
-            bool isReorderDrag = IsTextureCategoryReorderDrag();
             Rect dropArea = GUILayoutUtility.GetRect(0f, 48f, GUILayout.ExpandWidth(true));
             GUI.Box(dropArea, "拖入需要分组的图片或文件夹", EditorStyles.helpBox);
 
             Event currentEvent = Event.current;
-            if (isReorderDrag ||
-                !dropArea.Contains(currentEvent.mousePosition) ||
+            if (!dropArea.Contains(currentEvent.mousePosition) ||
                 (currentEvent.type != EventType.DragUpdated && currentEvent.type != EventType.DragPerform))
             {
                 return;
@@ -1176,13 +1184,11 @@ namespace SleepyCobalt.Tools.TextureTools
 
         private void DrawIgnoredTextureDropArea(TextureCategoryProjectSettings settings)
         {
-            bool isReorderDrag = IsTextureCategoryReorderDrag();
             Rect dropArea = GUILayoutUtility.GetRect(0f, 42f, GUILayout.ExpandWidth(true));
             GUI.Box(dropArea, "拖入要忽略的图片或文件夹", EditorStyles.helpBox);
 
             Event currentEvent = Event.current;
-            if (isReorderDrag ||
-                !dropArea.Contains(currentEvent.mousePosition) ||
+            if (!dropArea.Contains(currentEvent.mousePosition) ||
                 (currentEvent.type != EventType.DragUpdated && currentEvent.type != EventType.DragPerform))
             {
                 return;
@@ -1426,118 +1432,76 @@ namespace SleepyCobalt.Tools.TextureTools
         {
             int controlId = GUIUtility.GetControlID(FocusType.Passive);
             Event currentEvent = Event.current;
-            bool isPendingHandle = string.Equals(
-                pendingTextureCategoryReorderId,
-                category == null ? string.Empty : category.id,
-                StringComparison.Ordinal);
+            string categoryId = category == null ? string.Empty : category.id;
+
+            if ((currentEvent.type == EventType.Ignore ||
+                currentEvent.type == EventType.MouseLeaveWindow ||
+                (currentEvent.type == EventType.KeyDown && currentEvent.keyCode == KeyCode.Escape)) &&
+                (GUIUtility.hotControl == textureCategoryReorderControlId || isTextureCategoryReordering) &&
+                !string.IsNullOrEmpty(draggedTextureCategoryId))
+            {
+                ClearTextureCategoryReorderState();
+                currentEvent.Use();
+                Repaint();
+                return;
+            }
 
             if (currentEvent.type == EventType.MouseDown &&
                 currentEvent.button == 0 &&
-                handleRect.Contains(currentEvent.mousePosition))
+                handleRect.Contains(currentEvent.mousePosition) &&
+                !string.IsNullOrEmpty(categoryId) &&
+                categoryIndex >= 0)
             {
-                pendingTextureCategoryReorderId = category == null ? string.Empty : category.id;
-                pendingTextureCategoryReorderIndex = categoryIndex;
+                draggedTextureCategoryId = categoryId;
+                draggedTextureCategorySourceIndex = categoryIndex;
+                draggedTextureCategoryTargetSlot = -1;
+                isTextureCategoryReordering = false;
+                textureCategoryDragStartMousePosition = currentEvent.mousePosition;
+                textureCategoryReorderControlId = controlId;
                 GUIUtility.hotControl = controlId;
                 currentEvent.Use();
                 return;
             }
 
             if (currentEvent.type == EventType.MouseDrag &&
-                GUIUtility.hotControl == controlId &&
-                isPendingHandle)
+                currentEvent.button == 0 &&
+                GUIUtility.hotControl == textureCategoryReorderControlId &&
+                !string.IsNullOrEmpty(draggedTextureCategoryId))
             {
-                BeginTextureCategoryReorderDrag(pendingTextureCategoryReorderId, pendingTextureCategoryReorderIndex);
-                GUIUtility.hotControl = 0;
+                isTextureCategoryReordering = true;
+                textureCategoryReorderDragEventThisPass = true;
                 currentEvent.Use();
+                Repaint();
                 return;
             }
 
             if (currentEvent.type == EventType.MouseUp &&
-                GUIUtility.hotControl == controlId)
+                currentEvent.button == 0 &&
+                GUIUtility.hotControl == textureCategoryReorderControlId &&
+                !string.IsNullOrEmpty(draggedTextureCategoryId))
             {
-                GUIUtility.hotControl = 0;
-                pendingTextureCategoryReorderId = null;
-                pendingTextureCategoryReorderIndex = -1;
-                currentEvent.Use();
-            }
-        }
-
-        private static void BeginTextureCategoryReorderDrag(string categoryId, int categoryIndex)
-        {
-            if (string.IsNullOrEmpty(categoryId) || categoryIndex < 0)
-                return;
-
-            DragAndDrop.PrepareStartDrag();
-            DragAndDrop.SetGenericData(TextureCategoryReorderKey, categoryId);
-            DragAndDrop.StartDrag("调整贴图分组顺序");
-        }
-
-        private static bool TryGetTextureCategoryReorderId(out string categoryId)
-        {
-            categoryId = DragAndDrop.GetGenericData(TextureCategoryReorderKey) as string;
-            return !string.IsNullOrEmpty(categoryId);
-        }
-
-        private bool IsTextureCategoryReorderDrag()
-        {
-            return TryGetTextureCategoryReorderId(out _);
-        }
-
-        private void HandleTextureCategoryReorderDrag(TextureCategoryProjectSettings settings)
-        {
-            Event currentEvent = Event.current;
-            bool hasPendingHandle = !string.IsNullOrEmpty(pendingTextureCategoryReorderId);
-            if (currentEvent.type == EventType.DragExited)
-            {
-                if (TryGetTextureCategoryReorderId(out _) || hasPendingHandle)
-                {
+                if (isTextureCategoryReordering)
+                    textureCategoryReorderMouseUpEventThisPass = true;
+                else
                     ClearTextureCategoryReorderState();
-                    currentEvent.Use();
-                    Repaint();
-                }
-
-                return;
-            }
-
-            if (!TryGetTextureCategoryReorderId(out string categoryId))
-                return;
-
-            int sourceIndex = FindTextureCategoryIndex(settings.categories, categoryId);
-            if (sourceIndex < 0)
-            {
-                ClearTextureCategoryReorderState();
-                return;
-            }
-
-            if (currentEvent.type == EventType.DragUpdated)
-            {
-                textureCategoryReorderDropIndex = CalculateTextureCategoryReorderDropIndex(
-                    currentEvent.mousePosition);
-                DragAndDrop.visualMode = DragAndDropVisualMode.Move;
-                currentEvent.Use();
-                Repaint();
-            }
-            else if (currentEvent.type == EventType.DragPerform)
-            {
-                if (textureCategoryReorderDropIndex < 0)
-                {
-                    textureCategoryReorderDropIndex = CalculateTextureCategoryReorderDropIndex(
-                        currentEvent.mousePosition);
-                }
-
-                DragAndDrop.visualMode = DragAndDropVisualMode.Move;
-                DragAndDrop.AcceptDrag();
-                CompleteTextureCategoryReorder(settings, categoryId, sourceIndex);
                 currentEvent.Use();
             }
         }
 
-        private int CalculateTextureCategoryReorderDropIndex(Vector2 mousePosition)
+        private void UpdateTextureCategoryReorderTargetSlotForCurrentPass(int categoryCount)
         {
-            Vector2 mouseScreenPosition = GUIUtility.GUIToScreenPoint(mousePosition);
-            return GetTextureCategoryReorderInsertionSlot(
-                mouseScreenPosition.y,
-                textureCategoryCardScreenRects);
+            if (!isTextureCategoryReordering || textureCategoryCardRects.Count != categoryCount)
+                return;
+
+            Event currentEvent = Event.current;
+            if (currentEvent.type == EventType.Repaint ||
+                textureCategoryReorderDragEventThisPass ||
+                textureCategoryReorderMouseUpEventThisPass)
+            {
+                draggedTextureCategoryTargetSlot = GetTextureCategoryReorderInsertionSlot(
+                    currentEvent.mousePosition.y,
+                    textureCategoryCardRects);
+            }
         }
 
         private static int GetTextureCategoryReorderInsertionSlot(
@@ -1575,12 +1539,11 @@ namespace SleepyCobalt.Tools.TextureTools
             return -1;
         }
 
-        private void CompleteTextureCategoryReorder(
-            TextureCategoryProjectSettings settings,
-            string categoryId,
-            int sourceIndex)
+        private void CompleteTextureCategoryReorder(TextureCategoryProjectSettings settings)
         {
-            if (sourceIndex >= 0 && sourceIndex < settings.categories.Count)
+            string categoryId = draggedTextureCategoryId;
+            int sourceIndex = FindTextureCategoryIndex(settings.categories, categoryId);
+            if (sourceIndex >= 0 && draggedTextureCategoryTargetSlot >= 0)
             {
                 TextureCategoryRecord category = settings.categories[sourceIndex];
                 if (category != null && string.Equals(category.id, categoryId, StringComparison.Ordinal))
@@ -1588,7 +1551,7 @@ namespace SleepyCobalt.Tools.TextureTools
                     bool changed = MoveTextureCategoryToInsertionSlot(
                         settings.categories,
                         sourceIndex,
-                        textureCategoryReorderDropIndex);
+                        draggedTextureCategoryTargetSlot);
                     if (changed)
                     {
                         settings.SaveSettings();
@@ -1644,56 +1607,62 @@ namespace SleepyCobalt.Tools.TextureTools
 
         private void ClearTextureCategoryReorderState()
         {
-            DragAndDrop.SetGenericData(TextureCategoryReorderKey, null);
-            pendingTextureCategoryReorderId = null;
-            pendingTextureCategoryReorderIndex = -1;
-            textureCategoryReorderDropIndex = -1;
+            GUIUtility.hotControl = 0;
+            draggedTextureCategoryId = null;
+            draggedTextureCategorySourceIndex = -1;
+            draggedTextureCategoryTargetSlot = -1;
+            isTextureCategoryReordering = false;
+            textureCategoryDragStartMousePosition = Vector2.zero;
+            textureCategoryReorderControlId = 0;
         }
 
         private void DrawTextureCategoryReorderInsertionLine()
         {
             if (Event.current.type != EventType.Repaint ||
-                !IsTextureCategoryReorderDrag() ||
-                textureCategoryReorderDropIndex < 0 ||
-                textureCategoryCardScreenRects.Count == 0)
+                !isTextureCategoryReordering ||
+                draggedTextureCategoryTargetSlot < 0 ||
+                textureCategoryCardRects.Count == 0)
             {
                 return;
             }
 
             int insertionSlot = Mathf.Clamp(
-                textureCategoryReorderDropIndex,
+                draggedTextureCategoryTargetSlot,
                 0,
-                textureCategoryCardScreenRects.Count);
-            Rect targetScreenRect;
-            if (insertionSlot < textureCategoryCardScreenRects.Count)
+                textureCategoryCardRects.Count);
+            Rect targetRect;
+            if (insertionSlot < textureCategoryCardRects.Count)
             {
-                targetScreenRect = textureCategoryCardScreenRects[insertionSlot];
-                targetScreenRect.y -= 3f;
+                targetRect = textureCategoryCardRects[insertionSlot];
+                targetRect.y -= 3f;
             }
             else
             {
-                targetScreenRect = textureCategoryCardScreenRects[textureCategoryCardScreenRects.Count - 1];
-                targetScreenRect.y = targetScreenRect.yMax + 3f;
+                targetRect = textureCategoryCardRects[textureCategoryCardRects.Count - 1];
+                targetRect.y = targetRect.yMax + 3f;
             }
 
-            Rect targetGuiRect = ConvertTextureCategoryScreenRectToGuiRect(targetScreenRect);
             EditorGUI.DrawRect(
-                new Rect(targetGuiRect.x, targetGuiRect.y, targetGuiRect.width, 2f),
+                new Rect(targetRect.x, targetRect.y, targetRect.width, 2f),
                 new Color(0.24f, 0.58f, 0.95f, 0.95f));
         }
 
-        private static Rect ConvertTextureCategoryGuiRectToScreenRect(Rect guiRect)
+        private void DrawTextureCategoryReorderDebugInfo(int categoryCount)
         {
-            Vector2 screenMin = GUIUtility.GUIToScreenPoint(guiRect.min);
-            Vector2 screenMax = GUIUtility.GUIToScreenPoint(guiRect.max);
-            return Rect.MinMaxRect(screenMin.x, screenMin.y, screenMax.x, screenMax.y);
-        }
+            if (!DebugTextureCategoryReorder ||
+                (!isTextureCategoryReordering && string.IsNullOrEmpty(draggedTextureCategoryId)))
+            {
+                return;
+            }
 
-        private static Rect ConvertTextureCategoryScreenRectToGuiRect(Rect screenRect)
-        {
-            Vector2 guiMin = GUIUtility.ScreenToGUIPoint(screenRect.min);
-            Vector2 guiMax = GUIUtility.ScreenToGUIPoint(screenRect.max);
-            return Rect.MinMaxRect(guiMin.x, guiMin.y, guiMax.x, guiMax.y);
+            EditorGUILayout.LabelField(
+                "Source=" + draggedTextureCategorySourceIndex +
+                "  Slot=" + draggedTextureCategoryTargetSlot +
+                "  MouseY=" + Event.current.mousePosition.y.ToString("0") +
+                "  Cards=" + categoryCount +
+                "  Hot=" + GUIUtility.hotControl +
+                "  Dragging=" + isTextureCategoryReordering,
+                EditorStyles.miniLabel);
         }
 
         private void DrawTextureCategoryPresetField(
@@ -1810,13 +1779,11 @@ namespace SleepyCobalt.Tools.TextureTools
             TextureCategoryProjectSettings settings,
             TextureCategoryRecord category)
         {
-            bool isReorderDrag = IsTextureCategoryReorderDrag();
             Rect dropArea = GUILayoutUtility.GetRect(0f, 54f, GUILayout.ExpandWidth(true));
             GUI.Box(dropArea, "从 Project 拖入图片或文件夹", EditorStyles.helpBox);
 
             Event currentEvent = Event.current;
-            if (isReorderDrag ||
-                !dropArea.Contains(currentEvent.mousePosition) ||
+            if (!dropArea.Contains(currentEvent.mousePosition) ||
                 (currentEvent.type != EventType.DragUpdated && currentEvent.type != EventType.DragPerform))
             {
                 return;
