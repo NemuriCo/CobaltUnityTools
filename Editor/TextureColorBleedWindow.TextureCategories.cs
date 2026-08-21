@@ -52,6 +52,37 @@ namespace SleepyCobalt.Tools.TextureTools
 
         private TextureCategoryResolutionSet textureCategoryResolution;
         private bool textureCategoryResolutionDirty = true;
+        private enum TextureLocateKind
+        {
+            None,
+            CategoryMember,
+            Ungrouped
+        }
+
+        private enum TextureLocateResolutionKind
+        {
+            CategoryMember,
+            Ungrouped,
+            Ignored,
+            Conflict,
+            OutsideClassificationScope,
+            NotFound
+        }
+
+        private sealed class TextureLocateResult
+        {
+            internal TextureLocateResolutionKind kind;
+            internal TextureCategoryResolvedRecord targetCategory;
+            internal readonly List<TextureCategoryResolvedRecord> categories =
+                new List<TextureCategoryResolvedRecord>();
+        }
+
+        private string pendingLocateTexturePath;
+        private string pendingLocateCategoryId;
+        private TextureLocateKind pendingLocateKind;
+        private bool pendingLocateTileFoundThisPass;
+        private Rect textureCategoriesViewportRect;
+
         private readonly Dictionary<string, string> textureCategoryMemberSearchTexts =
             new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, TextureCategoryQuickSearch> textureCategoryMemberQuickSearches =
@@ -135,12 +166,15 @@ namespace SleepyCobalt.Tools.TextureTools
         {
             TextureCategoryProjectSettings settings = GetTextureCategorySettings();
             EnsureTextureCategoryResolution(settings);
+            PreparePendingTextureLocate();
 
             textureCategoriesScrollPosition = EditorGUILayout.BeginScrollView(
                 textureCategoriesScrollPosition,
                 GUIStyle.none,
                 GUI.skin.verticalScrollbar,
                 GUILayout.ExpandWidth(true));
+            textureCategoriesViewportRect = GUILayoutUtility.GetLastRect();
+            pendingLocateTileFoundThisPass = false;
             EditorGUILayout.BeginVertical(GUILayout.Width(GetTextureCategoryContentWidth()));
             EditorGUILayout.LabelField("贴图分组", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
@@ -203,6 +237,8 @@ namespace SleepyCobalt.Tools.TextureTools
 
             EditorGUILayout.EndVertical();
             EditorGUILayout.EndScrollView();
+
+            FinishPendingTextureLocatePass();
         }
 
         private TextureCategoryProjectSettings GetTextureCategorySettings()
@@ -221,6 +257,226 @@ namespace SleepyCobalt.Tools.TextureTools
 
             textureCategoryResolution = TextureCategoryResolver.Resolve(settings);
             textureCategoryResolutionDirty = false;
+        }
+
+        private void QueueTextureLocate(string assetPath)
+        {
+            pendingLocateTexturePath = NormalizePath(assetPath);
+            pendingLocateCategoryId = string.Empty;
+            pendingLocateKind = TextureLocateKind.None;
+            pendingLocateTileFoundThisPass = false;
+            Repaint();
+        }
+
+        private void PreparePendingTextureLocate()
+        {
+            if (string.IsNullOrEmpty(pendingLocateTexturePath))
+                return;
+
+            TextureLocateResult location = TryFindTextureLocation(
+                textureCategoryResolution,
+                pendingLocateTexturePath);
+            switch (location.kind)
+            {
+                case TextureLocateResolutionKind.CategoryMember:
+                case TextureLocateResolutionKind.Conflict:
+                    TextureCategoryResolvedRecord resolved = location.targetCategory;
+                    if (resolved == null || resolved.category == null || string.IsNullOrEmpty(resolved.category.id))
+                    {
+                        ShowTextureLocateNotification("无法在当前贴图分组解析结果中找到该贴图。");
+                        ClearPendingTextureLocate();
+                        return;
+                    }
+
+                    resolved.category.expanded = true;
+                    ClearTextureCategoryMemberFilters(resolved.category.id);
+                    HashSet<string> selectedPaths = GetSelectedTextureCategoryMemberPaths(resolved.category);
+                    selectedPaths.Clear();
+                    selectedPaths.Add(pendingLocateTexturePath);
+                    lastSelectedTextureCategoryMemberPaths[resolved.category.id] = pendingLocateTexturePath;
+                    pendingLocateCategoryId = resolved.category.id;
+                    pendingLocateKind = TextureLocateKind.CategoryMember;
+                    if (location.kind == TextureLocateResolutionKind.Conflict)
+                        ShowTextureLocateNotification("该贴图同时属于多个分组，请检查分组来源。");
+                    return;
+
+                case TextureLocateResolutionKind.Ungrouped:
+                    showUngroupedTextures = true;
+                    ungroupedSearchText = string.Empty;
+                    ungroupedQuickSearch = TextureCategoryQuickSearch.None;
+                    ungroupedMaxTextureSizeFilter = NoMaxTextureSizeFilter;
+                    selectedUngroupedAssetPaths.Clear();
+                    selectedUngroupedAssetPaths.Add(pendingLocateTexturePath);
+                    lastSelectedUngroupedAssetPath = pendingLocateTexturePath;
+                    pendingLocateCategoryId = string.Empty;
+                    pendingLocateKind = TextureLocateKind.Ungrouped;
+                    return;
+
+                case TextureLocateResolutionKind.Ignored:
+                    ShowTextureLocateNotification("该贴图当前被忽略规则排除。");
+                    ClearPendingTextureLocate();
+                    return;
+
+                case TextureLocateResolutionKind.OutsideClassificationScope:
+                    ShowTextureLocateNotification("该贴图不在当前待分组范围内。");
+                    ClearPendingTextureLocate();
+                    return;
+
+                default:
+                    ShowTextureLocateNotification("无法在当前贴图分组解析结果中找到该贴图。");
+                    ClearPendingTextureLocate();
+                    return;
+            }
+        }
+
+        private static TextureLocateResult TryFindTextureLocation(
+            TextureCategoryResolutionSet resolution,
+            string assetPath)
+        {
+            TextureLocateResult result = new TextureLocateResult();
+            string normalizedPath = NormalizePath(assetPath);
+            if (resolution == null || string.IsNullOrEmpty(normalizedPath))
+            {
+                result.kind = TextureLocateResolutionKind.NotFound;
+                return result;
+            }
+
+            if (!TextureCategoryResolver.TryClassifySupportedAsset(
+                    normalizedPath,
+                    out bool isTexture,
+                    out _)
+                || !isTexture)
+            {
+                result.kind = TextureLocateResolutionKind.NotFound;
+                return result;
+            }
+
+            foreach (TextureCategoryResolvedRecord resolved in resolution.categories)
+            {
+                if (resolved == null || !ContainsAssetPath(resolved.assetPaths, normalizedPath))
+                    continue;
+
+                result.categories.Add(resolved);
+                if (result.targetCategory == null)
+                    result.targetCategory = resolved;
+            }
+
+            if (result.categories.Count > 1)
+            {
+                result.kind = TextureLocateResolutionKind.Conflict;
+                return result;
+            }
+
+            if (result.categories.Count == 1)
+            {
+                result.kind = TextureLocateResolutionKind.CategoryMember;
+                return result;
+            }
+
+            if (ContainsAssetPath(resolution.ungroupedAssetPaths, normalizedPath))
+            {
+                result.kind = TextureLocateResolutionKind.Ungrouped;
+                return result;
+            }
+
+            if (ContainsAssetPath(resolution.ignoredAssetPaths, normalizedPath))
+            {
+                result.kind = TextureLocateResolutionKind.Ignored;
+                return result;
+            }
+
+            result.kind = TextureLocateResolutionKind.OutsideClassificationScope;
+            return result;
+        }
+
+        private static bool ContainsAssetPath(IList<string> assetPaths, string assetPath)
+        {
+            if (assetPaths == null || string.IsNullOrEmpty(assetPath))
+                return false;
+
+            foreach (string candidate in assetPaths)
+            {
+                if (string.Equals(candidate, assetPath, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private void ClearTextureCategoryMemberFilters(string categoryId)
+        {
+            if (string.IsNullOrEmpty(categoryId))
+                return;
+
+            textureCategoryMemberSearchTexts.Remove(categoryId);
+            textureCategoryMemberQuickSearches.Remove(categoryId);
+            textureCategoryMemberMaxTextureSizeFilters.Remove(categoryId);
+        }
+
+        private void ShowTextureLocateNotification(string message)
+        {
+            ShowNotification(new GUIContent(message));
+        }
+
+        private void ClearPendingTextureLocate()
+        {
+            pendingLocateTexturePath = string.Empty;
+            pendingLocateCategoryId = string.Empty;
+            pendingLocateKind = TextureLocateKind.None;
+            pendingLocateTileFoundThisPass = false;
+        }
+
+        private bool IsPendingTextureLocateTarget(TextureLocateKind kind, string assetPath)
+        {
+            return pendingLocateKind == kind &&
+                   !string.IsNullOrEmpty(pendingLocateTexturePath) &&
+                   string.Equals(pendingLocateTexturePath, assetPath, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void TryCompletePendingTextureLocate(
+            TextureLocateKind kind,
+            string assetPath,
+            Rect tileRect)
+        {
+            if (!IsPendingTextureLocateTarget(kind, assetPath))
+                return;
+
+            pendingLocateTileFoundThisPass = true;
+            if (Event.current.type != EventType.Repaint)
+                return;
+
+            float viewportHeight = textureCategoriesViewportRect.height;
+            if (viewportHeight <= 0f)
+            {
+                Repaint();
+                return;
+            }
+
+            float visibleTop = textureCategoriesScrollPosition.y;
+            float visibleBottom = visibleTop + viewportHeight;
+            float targetScroll = visibleTop;
+            if (tileRect.y < visibleTop)
+                targetScroll = tileRect.y - 8f;
+            else if (tileRect.yMax > visibleBottom)
+                targetScroll = tileRect.yMax - viewportHeight + 8f;
+
+            textureCategoriesScrollPosition.y = Mathf.Max(0f, targetScroll);
+
+            ClearPendingTextureLocate();
+            Repaint();
+        }
+
+        private void FinishPendingTextureLocatePass()
+        {
+            if (Event.current.type != EventType.Repaint ||
+                string.IsNullOrEmpty(pendingLocateTexturePath) ||
+                pendingLocateTileFoundThisPass)
+            {
+                return;
+            }
+
+            ShowTextureLocateNotification("无法在当前贴图分组页面中找到该贴图。");
+            ClearPendingTextureLocate();
         }
 
         private void DrawUngroupedTextureSection(TextureCategoryProjectSettings settings)
@@ -349,6 +605,7 @@ namespace SleepyCobalt.Tools.TextureTools
                     tileHeight,
                     GUILayout.Width(tileWidth),
                     GUILayout.Height(tileHeight));
+                TryCompletePendingTextureLocate(TextureLocateKind.Ungrouped, path, tileRect);
                 bool selected = selectedUngroupedAssetPaths.Contains(path);
                 if (selected)
                     EditorGUI.DrawRect(tileRect, new Color(0.24f, 0.48f, 0.75f, 0.45f));
@@ -2128,6 +2385,11 @@ namespace SleepyCobalt.Tools.TextureTools
                     tileHeight,
                     GUILayout.Width(tileWidth),
                     GUILayout.Height(tileHeight));
+                if (pendingLocateKind == TextureLocateKind.CategoryMember &&
+                    string.Equals(pendingLocateCategoryId, category.id, StringComparison.Ordinal))
+                {
+                    TryCompletePendingTextureLocate(TextureLocateKind.CategoryMember, path, tileRect);
+                }
 
                 if (selectedPaths.Contains(path))
                     EditorGUI.DrawRect(tileRect, new Color(0.24f, 0.48f, 0.75f, 0.45f));

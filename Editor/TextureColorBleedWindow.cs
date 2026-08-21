@@ -51,6 +51,13 @@ namespace SleepyCobalt.Tools.TextureTools
             return window;
         }
 
+        internal static void OpenAndLocateTexture(string assetPath)
+        {
+            TextureColorBleedWindow window = OpenWindow();
+            window.currentPage = ToolPage.TextureCategories;
+            window.QueueTextureLocate(assetPath);
+        }
+
         private void OnGUI()
         {
             EditorGUILayout.BeginHorizontal();
