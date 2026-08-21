@@ -43,6 +43,7 @@ namespace SleepyCobalt.Tools.TextureTools
             new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, TextureQuickSearchInfo> textureQuickSearchInfoByPath =
             new Dictionary<string, TextureQuickSearchInfo>(StringComparer.OrdinalIgnoreCase);
+        private static GUIStyle textureCategoryMissingSourceLabelStyle;
         private readonly HashSet<string> selectedUngroupedAssetPaths =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, HashSet<string>> selectedTextureCategoryMemberPaths =
@@ -103,8 +104,10 @@ namespace SleepyCobalt.Tools.TextureTools
 
             textureCategoriesScrollPosition = EditorGUILayout.BeginScrollView(
                 textureCategoriesScrollPosition,
-                false,
-                true);
+                GUIStyle.none,
+                GUI.skin.verticalScrollbar,
+                GUILayout.ExpandWidth(true));
+            EditorGUILayout.BeginVertical(GUILayout.Width(GetTextureCategoryContentWidth()));
             EditorGUILayout.LabelField("贴图分组", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
                 "创建分组并拖入 Unity 的 TextureImporter Preset 资源。可从 Project 窗口拖入图片或文件夹；" +
@@ -144,6 +147,7 @@ namespace SleepyCobalt.Tools.TextureTools
                 break;
             }
 
+            EditorGUILayout.EndVertical();
             EditorGUILayout.EndScrollView();
         }
 
@@ -711,9 +715,7 @@ namespace SleepyCobalt.Tools.TextureTools
                     }
                     else
                     {
-                        EditorGUILayout.LabelField(
-                            (source == null ? "未知来源" : source.lastKnownPath) + "（失效）",
-                            EditorStyles.miniLabel);
+                        DrawTextureCategoryMissingSourceLabel(source == null ? "未知来源" : source.lastKnownPath);
                     }
 
                     if (GUILayout.Button("移除", GUILayout.Width(48f)))
@@ -854,9 +856,7 @@ namespace SleepyCobalt.Tools.TextureTools
                     }
                     else
                     {
-                        EditorGUILayout.LabelField(
-                            (source == null ? "未知来源" : source.lastKnownPath) + "（失效）",
-                            EditorStyles.miniLabel);
+                        DrawTextureCategoryMissingSourceLabel(source == null ? "未知来源" : source.lastKnownPath);
                     }
 
                     if (GUILayout.Button("取消忽略", GUILayout.Width(64f)))
@@ -1161,7 +1161,7 @@ namespace SleepyCobalt.Tools.TextureTools
 
         private float GetTextureCategoryContentWidth()
         {
-            return Mathf.Max(240f, position.width - 160f - 32f);
+            return Mathf.Max(1f, position.width - 160f - 32f);
         }
 
         private bool DrawTextureCategoryCard(
@@ -1243,6 +1243,7 @@ namespace SleepyCobalt.Tools.TextureTools
             TextureCategoryProjectSettings settings,
             TextureCategoryRecord category)
         {
+            EditorGUILayout.BeginHorizontal();
             EditorGUI.BeginChangeCheck();
             Preset preset = (Preset)EditorGUILayout.ObjectField(
                 new GUIContent("TextureImporter Preset", "拖入 Preset Type 为 UnityEditor.TextureImporter 的资源。"),
@@ -1254,6 +1255,10 @@ namespace SleepyCobalt.Tools.TextureTools
                 category.textureImporterPreset = preset;
                 settings.SaveSettings();
             }
+
+            if (GUILayout.Button("预设", EditorStyles.popup, GUILayout.Width(72f)))
+                ShowCobaltTextureImporterPresetMenu(settings, category);
+            EditorGUILayout.EndHorizontal();
 
             if (category.textureImporterPreset == null)
             {
@@ -1276,11 +1281,72 @@ namespace SleepyCobalt.Tools.TextureTools
 
         private static bool IsTextureImporterPreset(Preset preset)
         {
-            return preset != null &&
-                   string.Equals(
-                       preset.GetTargetFullTypeName(),
-                       typeof(TextureImporter).FullName,
-                       StringComparison.Ordinal);
+            return CobaltTextureImporterPresetCatalog.IsTextureImporterPreset(preset);
+        }
+
+        private void ShowCobaltTextureImporterPresetMenu(
+            TextureCategoryProjectSettings settings,
+            TextureCategoryRecord category)
+        {
+            GenericMenu menu = new GenericMenu();
+            menu.AddDisabledItem(new GUIContent("预设"));
+            menu.AddSeparator(string.Empty);
+
+            IList<CobaltTextureImporterPresetInfo> presets =
+                CobaltTextureImporterPresetCatalog.GetPresets();
+            if (presets.Count == 0)
+            {
+                menu.AddDisabledItem(new GUIContent("没有可用的 Cobalt TextureImporter Preset"));
+            }
+            else
+            {
+                foreach (CobaltTextureImporterPresetInfo presetInfo in presets)
+                {
+                    CobaltTextureImporterPresetInfo selectedPresetInfo = presetInfo;
+                    menu.AddItem(
+                        new GUIContent(selectedPresetInfo.displayName),
+                        selectedPresetInfo.preset == category.textureImporterPreset,
+                        () => SelectCobaltTextureImporterPreset(
+                            settings,
+                            category,
+                            selectedPresetInfo.preset));
+                }
+            }
+
+            menu.AddSeparator(string.Empty);
+            if (category.textureImporterPreset == null)
+            {
+                menu.AddDisabledItem(new GUIContent("定位当前预设"));
+            }
+            else
+            {
+                Preset currentPreset = category.textureImporterPreset;
+                menu.AddItem(
+                    new GUIContent("定位当前预设"),
+                    false,
+                    () => PingTextureImporterPreset(currentPreset));
+            }
+
+            menu.ShowAsContext();
+        }
+
+        private void SelectCobaltTextureImporterPreset(
+            TextureCategoryProjectSettings settings,
+            TextureCategoryRecord category,
+            Preset preset)
+        {
+            category.textureImporterPreset = preset;
+            settings.SaveSettings();
+            Repaint();
+        }
+
+        private static void PingTextureImporterPreset(Preset preset)
+        {
+            if (preset == null)
+                return;
+
+            EditorGUIUtility.PingObject(preset);
+            Selection.activeObject = preset;
         }
 
         private void DrawTextureCategoryDropArea(
@@ -1452,7 +1518,7 @@ namespace SleepyCobalt.Tools.TextureTools
                 else
                 {
                     string lastPath = source == null ? "未知来源" : source.lastKnownPath;
-                    EditorGUILayout.LabelField(lastPath + "（失效）", EditorStyles.miniLabel);
+                    DrawTextureCategoryMissingSourceLabel(lastPath);
                 }
 
                 if (GUILayout.Button("移除", GUILayout.Width(48f)))
@@ -1471,6 +1537,27 @@ namespace SleepyCobalt.Tools.TextureTools
 
             if (!displayedRule)
                 EditorGUILayout.LabelField("没有文件夹规则；单图来源统一显示在当前成员缩略图中。", EditorStyles.miniLabel);
+        }
+
+        private static void DrawTextureCategoryMissingSourceLabel(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+                path = "未知来源";
+
+            if (textureCategoryMissingSourceLabelStyle == null)
+            {
+                textureCategoryMissingSourceLabelStyle = new GUIStyle(EditorStyles.miniLabel)
+                {
+                    wordWrap = true,
+                    clipping = TextClipping.Clip
+                };
+            }
+
+            EditorGUILayout.LabelField(
+                path + "（失效）",
+                textureCategoryMissingSourceLabelStyle,
+                GUILayout.MinWidth(0f),
+                GUILayout.ExpandWidth(true));
         }
 
         private void DrawTextureCategoryMemberGrid(
