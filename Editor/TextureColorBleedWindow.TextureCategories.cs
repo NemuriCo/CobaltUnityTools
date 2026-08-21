@@ -15,6 +15,7 @@ namespace SleepyCobalt.Tools.TextureTools
         [SerializeField] private bool showIgnoredTextureRules;
         [SerializeField] private string ungroupedSearchText = string.Empty;
         private TextureCategoryQuickSearch ungroupedQuickSearch;
+        private int ungroupedMaxTextureSizeFilter;
 
         private enum TextureCategoryQuickSearch
         {
@@ -25,12 +26,28 @@ namespace SleepyCobalt.Tools.TextureTools
             Alpha
         }
 
+        private const int NoMaxTextureSizeFilter = 0;
+        private static readonly int[] DefaultMaxTextureSizeOptions =
+        {
+            32,
+            64,
+            128,
+            256,
+            512,
+            1024,
+            2048,
+            4096,
+            8192,
+            16384
+        };
+
         private sealed class TextureQuickSearchInfo
         {
             internal bool isTexture;
             internal TextureImporterType textureType;
             internal bool alphaIsTransparency;
             internal bool hasSourceAlpha;
+            internal int defaultMaxTextureSize;
         }
 
         private TextureCategoryResolutionSet textureCategoryResolution;
@@ -39,6 +56,8 @@ namespace SleepyCobalt.Tools.TextureTools
             new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, TextureCategoryQuickSearch> textureCategoryMemberQuickSearches =
             new Dictionary<string, TextureCategoryQuickSearch>(StringComparer.Ordinal);
+        private readonly Dictionary<string, int> textureCategoryMemberMaxTextureSizeFilters =
+            new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly Dictionary<string, HashSet<string>> textureSearchMatchesByQuery =
             new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, TextureQuickSearchInfo> textureQuickSearchInfoByPath =
@@ -58,6 +77,20 @@ namespace SleepyCobalt.Tools.TextureTools
             internal List<string> assetPaths;
             internal Preset textureImporterPreset;
         }
+
+        private const string TextureCategoryReorderKey =
+            "SleepyCobalt.TextureCategoryReorder";
+
+        private sealed class TextureCategoryCardLayout
+        {
+            internal Rect cardRect;
+        }
+
+        private readonly List<TextureCategoryCardLayout> textureCategoryCardLayouts =
+            new List<TextureCategoryCardLayout>();
+        private string pendingTextureCategoryReorderId;
+        private int pendingTextureCategoryReorderIndex = -1;
+        private int textureCategoryReorderDropIndex = -1;
 
         private void OnEnable()
         {
@@ -82,6 +115,8 @@ namespace SleepyCobalt.Tools.TextureTools
         private void OnDisable()
         {
             EditorApplication.projectChanged -= OnTextureCategoryProjectChanged;
+            ClearTextureCategoryReorderState();
+            textureCategoryCardLayouts.Clear();
         }
 
         private void OnTextureCategoryProjectChanged()
@@ -118,6 +153,7 @@ namespace SleepyCobalt.Tools.TextureTools
             DrawTextureClassificationScope(settings);
             DrawUngroupedTextureSection(settings);
             DrawIgnoredTextureRules(settings);
+            HandleTextureCategoryReorderDrag(settings);
 
             if (textureCategoryResolution.HasConflicts)
             {
@@ -134,18 +170,34 @@ namespace SleepyCobalt.Tools.TextureTools
                     MessageType.None);
             }
 
+            textureCategoryCardLayouts.Clear();
             for (int index = 0; index < settings.categories.Count; index++)
             {
                 TextureCategoryRecord category = settings.categories[index];
                 TextureCategoryResolvedRecord resolved = GetResolvedCategory(category);
-                if (!DrawTextureCategoryCard(settings, category, resolved))
+                bool deleteRequested = DrawTextureCategoryCard(
+                    settings,
+                    category,
+                    resolved,
+                    index,
+                    out Rect cardRect);
+                if (!deleteRequested)
+                {
+                    textureCategoryCardLayouts.Add(new TextureCategoryCardLayout
+                    {
+                        cardRect = cardRect
+                    });
                     continue;
+                }
 
+                ClearTextureCategoryReorderState();
                 settings.categories.RemoveAt(index);
                 settings.SaveSettings();
                 MarkTextureCategoryResolutionDirty();
                 break;
             }
+
+            DrawTextureCategoryReorderInsertionLine();
 
             EditorGUILayout.EndVertical();
             EditorGUILayout.EndScrollView();
@@ -209,10 +261,16 @@ namespace SleepyCobalt.Tools.TextureTools
                 visibleUngroupedPaths = GetFilteredUngroupedAssetPaths();
                 Repaint();
             }
-            if (GUILayout.Button(GetQuickSearchButtonLabel(ungroupedQuickSearch), GUILayout.Width(88f)))
-                ShowQuickSearchMenu(ungroupedQuickSearch, selected =>
+            if (GUILayout.Button(
+                    GetQuickSearchButtonLabel(ungroupedQuickSearch, ungroupedMaxTextureSizeFilter),
+                    GUILayout.Width(88f)))
+                ShowQuickSearchMenu(
+                    ungroupedQuickSearch,
+                    ungroupedMaxTextureSizeFilter,
+                    (selected, selectedMaxTextureSize) =>
                 {
                     ungroupedQuickSearch = selected;
+                    ungroupedMaxTextureSizeFilter = selectedMaxTextureSize;
                     Repaint();
                 });
             EditorGUILayout.EndHorizontal();
@@ -410,7 +468,8 @@ namespace SleepyCobalt.Tools.TextureTools
             return FilterTextureCategoryAssetPaths(
                 textureCategoryResolution.ungroupedAssetPaths,
                 ungroupedSearchText,
-                ungroupedQuickSearch);
+                ungroupedQuickSearch,
+                ungroupedMaxTextureSizeFilter);
         }
 
         private List<string> GetFilteredTextureCategoryAssetPaths(
@@ -425,13 +484,22 @@ namespace SleepyCobalt.Tools.TextureTools
             if (category != null && !string.IsNullOrEmpty(category.id))
                 textureCategoryMemberQuickSearches.TryGetValue(category.id, out quickSearch);
 
-            return FilterTextureCategoryAssetPaths(assetPaths, searchText, quickSearch);
+            int maxTextureSize = NoMaxTextureSizeFilter;
+            if (category != null && !string.IsNullOrEmpty(category.id))
+            {
+                textureCategoryMemberMaxTextureSizeFilters.TryGetValue(
+                    category.id,
+                    out maxTextureSize);
+            }
+
+            return FilterTextureCategoryAssetPaths(assetPaths, searchText, quickSearch, maxTextureSize);
         }
 
         private List<string> FilterTextureCategoryAssetPaths(
             IList<string> assetPaths,
             string searchText,
-            TextureCategoryQuickSearch quickSearch)
+            TextureCategoryQuickSearch quickSearch,
+            int maxTextureSize)
         {
             List<string> filteredPaths = new List<string>();
             if (assetPaths == null)
@@ -445,7 +513,7 @@ namespace SleepyCobalt.Tools.TextureTools
             {
                 if (!string.IsNullOrEmpty(path) &&
                     (matchingPaths == null || matchingPaths.Contains(path)) &&
-                    MatchesTextureQuickSearch(path, quickSearch))
+                    MatchesTextureQuickSearch(path, quickSearch, maxTextureSize))
                 {
                     filteredPaths.Add(path);
                 }
@@ -481,33 +549,57 @@ namespace SleepyCobalt.Tools.TextureTools
 
         private bool MatchesTextureQuickSearch(
             string path,
-            TextureCategoryQuickSearch quickSearch)
+            TextureCategoryQuickSearch quickSearch,
+            int maxTextureSize)
         {
-            if (quickSearch == TextureCategoryQuickSearch.None)
+            if (quickSearch == TextureCategoryQuickSearch.None &&
+                maxTextureSize == NoMaxTextureSizeFilter)
                 return true;
 
-            string fileName = Path.GetFileNameWithoutExtension(path) ?? string.Empty;
-            bool nameContainsNormal = fileName.IndexOf("Normal", StringComparison.OrdinalIgnoreCase) >= 0;
-            if (quickSearch == TextureCategoryQuickSearch.Normal && nameContainsNormal)
-                return true;
+            TextureQuickSearchInfo info = null;
+            bool matchesType = true;
+            if (quickSearch != TextureCategoryQuickSearch.None)
+            {
+                string fileName = Path.GetFileNameWithoutExtension(path) ?? string.Empty;
+                bool nameContainsNormal = fileName.IndexOf("Normal", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (quickSearch == TextureCategoryQuickSearch.Normal && nameContainsNormal)
+                {
+                    matchesType = true;
+                }
+                else
+                {
+                    info = GetTextureQuickSearchInfo(path);
+                    if (!info.isTexture)
+                        return false;
 
-            TextureQuickSearchInfo info = GetTextureQuickSearchInfo(path);
-            if (!info.isTexture)
+                    switch (quickSearch)
+                    {
+                        case TextureCategoryQuickSearch.Sprite:
+                            matchesType = info.textureType == TextureImporterType.Sprite;
+                            break;
+                        case TextureCategoryQuickSearch.Normal:
+                            matchesType = info.textureType == TextureImporterType.NormalMap;
+                            break;
+                        case TextureCategoryQuickSearch.Transparency:
+                            matchesType = info.alphaIsTransparency;
+                            break;
+                        case TextureCategoryQuickSearch.Alpha:
+                            matchesType = info.hasSourceAlpha && !info.alphaIsTransparency;
+                            break;
+                    }
+                }
+            }
+
+            if (!matchesType)
                 return false;
 
-            switch (quickSearch)
-            {
-                case TextureCategoryQuickSearch.Sprite:
-                    return info.textureType == TextureImporterType.Sprite;
-                case TextureCategoryQuickSearch.Normal:
-                    return info.textureType == TextureImporterType.NormalMap;
-                case TextureCategoryQuickSearch.Transparency:
-                    return info.alphaIsTransparency;
-                case TextureCategoryQuickSearch.Alpha:
-                    return info.hasSourceAlpha && !info.alphaIsTransparency;
-                default:
-                    return true;
-            }
+            if (maxTextureSize == NoMaxTextureSizeFilter)
+                return true;
+
+            if (info == null)
+                info = GetTextureQuickSearchInfo(path);
+
+            return info.isTexture && info.defaultMaxTextureSize == maxTextureSize;
         }
 
         private TextureQuickSearchInfo GetTextureQuickSearchInfo(string path)
@@ -530,26 +622,42 @@ namespace SleepyCobalt.Tools.TextureTools
                 {
                     info.hasSourceAlpha = false;
                 }
+
+                TextureImporterPlatformSettings defaultSettings = importer.GetDefaultPlatformTextureSettings();
+                info.defaultMaxTextureSize = defaultSettings.maxTextureSize;
             }
 
             textureQuickSearchInfoByPath[path] = info;
             return info;
         }
 
-        private static string GetQuickSearchButtonLabel(TextureCategoryQuickSearch quickSearch)
+        private static string GetQuickSearchButtonLabel(
+            TextureCategoryQuickSearch quickSearch,
+            int maxTextureSize)
+        {
+            string typeLabel = GetQuickSearchButtonTypeLabel(quickSearch);
+            if (maxTextureSize != NoMaxTextureSizeFilter)
+                return quickSearch == TextureCategoryQuickSearch.None
+                    ? "Max " + maxTextureSize
+                    : typeLabel + " / " + maxTextureSize;
+
+            return quickSearch == TextureCategoryQuickSearch.None ? "不限快捷条件" : typeLabel;
+        }
+
+        private static string GetQuickSearchButtonTypeLabel(TextureCategoryQuickSearch quickSearch)
         {
             switch (quickSearch)
             {
                 case TextureCategoryQuickSearch.Sprite:
-                    return "快捷：Sprite";
+                    return "Sprite";
                 case TextureCategoryQuickSearch.Normal:
-                    return "快捷：Normal";
+                    return "Normal";
                 case TextureCategoryQuickSearch.Transparency:
-                    return "快捷：透明";
+                    return "透明";
                 case TextureCategoryQuickSearch.Alpha:
-                    return "快捷：Alpha";
+                    return "Alpha";
                 default:
-                    return "快捷检索";
+                    return "不限快捷条件";
             }
         }
 
@@ -558,42 +666,63 @@ namespace SleepyCobalt.Tools.TextureTools
             switch (quickSearch)
             {
                 case TextureCategoryQuickSearch.Sprite:
-                    return "Sprite（Texture Type = Sprite）";
+                    return "Sprite";
                 case TextureCategoryQuickSearch.Normal:
-                    return "Normal（类型为 Normal 或名称含 Normal）";
+                    return "Normal";
                 case TextureCategoryQuickSearch.Transparency:
-                    return "Transparency（Alpha Is Transparency）";
+                    return "Transparency";
                 case TextureCategoryQuickSearch.Alpha:
-                    return "Alpha（有 Alpha 且未启用 Alpha Is Transparency）";
+                    return "Alpha";
                 default:
-                    return "不限快捷条件";
+                    return "不限";
             }
         }
 
         private static void ShowQuickSearchMenu(
             TextureCategoryQuickSearch currentSearch,
-            Action<TextureCategoryQuickSearch> onSelected)
+            int currentMaxTextureSize,
+            Action<TextureCategoryQuickSearch, int> onSelected)
         {
             GenericMenu menu = new GenericMenu();
-            AddQuickSearchMenuItem(menu, TextureCategoryQuickSearch.None, currentSearch, onSelected);
+            AddQuickSearchMenuItem(menu, currentSearch, currentMaxTextureSize, TextureCategoryQuickSearch.None, onSelected);
+            AddQuickSearchMenuItem(menu, currentSearch, currentMaxTextureSize, TextureCategoryQuickSearch.Sprite, onSelected);
+            AddQuickSearchMenuItem(menu, currentSearch, currentMaxTextureSize, TextureCategoryQuickSearch.Normal, onSelected);
+            AddQuickSearchMenuItem(menu, currentSearch, currentMaxTextureSize, TextureCategoryQuickSearch.Transparency, onSelected);
+            AddQuickSearchMenuItem(menu, currentSearch, currentMaxTextureSize, TextureCategoryQuickSearch.Alpha, onSelected);
+
             menu.AddSeparator(string.Empty);
-            AddQuickSearchMenuItem(menu, TextureCategoryQuickSearch.Sprite, currentSearch, onSelected);
-            AddQuickSearchMenuItem(menu, TextureCategoryQuickSearch.Normal, currentSearch, onSelected);
-            AddQuickSearchMenuItem(menu, TextureCategoryQuickSearch.Transparency, currentSearch, onSelected);
-            AddQuickSearchMenuItem(menu, TextureCategoryQuickSearch.Alpha, currentSearch, onSelected);
+            AddMaxTextureSizeMenuItem(menu, currentSearch, currentMaxTextureSize, NoMaxTextureSizeFilter, onSelected);
+            foreach (int maxTextureSize in DefaultMaxTextureSizeOptions)
+                AddMaxTextureSizeMenuItem(menu, currentSearch, currentMaxTextureSize, maxTextureSize, onSelected);
+
             menu.ShowAsContext();
         }
 
         private static void AddQuickSearchMenuItem(
             GenericMenu menu,
-            TextureCategoryQuickSearch quickSearch,
             TextureCategoryQuickSearch currentSearch,
-            Action<TextureCategoryQuickSearch> onSelected)
+            int currentMaxTextureSize,
+            TextureCategoryQuickSearch quickSearch,
+            Action<TextureCategoryQuickSearch, int> onSelected)
         {
             menu.AddItem(
-                new GUIContent(GetQuickSearchMenuLabel(quickSearch)),
+                new GUIContent("类型/" + GetQuickSearchMenuLabel(quickSearch)),
                 quickSearch == currentSearch,
-                () => onSelected(quickSearch));
+                () => onSelected(quickSearch, currentMaxTextureSize));
+        }
+
+        private static void AddMaxTextureSizeMenuItem(
+            GenericMenu menu,
+            TextureCategoryQuickSearch currentSearch,
+            int currentMaxTextureSize,
+            int maxTextureSize,
+            Action<TextureCategoryQuickSearch, int> onSelected)
+        {
+            string label = maxTextureSize == NoMaxTextureSizeFilter ? "不限" : maxTextureSize.ToString();
+            menu.AddItem(
+                new GUIContent("Max Size/" + label),
+                maxTextureSize == currentMaxTextureSize,
+                () => onSelected(currentSearch, maxTextureSize));
         }
 
         private void ShowUngroupedAssetContextMenu(
@@ -747,11 +876,13 @@ namespace SleepyCobalt.Tools.TextureTools
 
         private void DrawTextureClassificationDropArea(TextureCategoryProjectSettings settings)
         {
+            bool isReorderDrag = IsTextureCategoryReorderDrag();
             Rect dropArea = GUILayoutUtility.GetRect(0f, 48f, GUILayout.ExpandWidth(true));
             GUI.Box(dropArea, "拖入需要分组的图片或文件夹", EditorStyles.helpBox);
 
             Event currentEvent = Event.current;
-            if (!dropArea.Contains(currentEvent.mousePosition) ||
+            if (isReorderDrag ||
+                !dropArea.Contains(currentEvent.mousePosition) ||
                 (currentEvent.type != EventType.DragUpdated && currentEvent.type != EventType.DragPerform))
             {
                 return;
@@ -1039,11 +1170,13 @@ namespace SleepyCobalt.Tools.TextureTools
 
         private void DrawIgnoredTextureDropArea(TextureCategoryProjectSettings settings)
         {
+            bool isReorderDrag = IsTextureCategoryReorderDrag();
             Rect dropArea = GUILayoutUtility.GetRect(0f, 42f, GUILayout.ExpandWidth(true));
             GUI.Box(dropArea, "拖入要忽略的图片或文件夹", EditorStyles.helpBox);
 
             Event currentEvent = Event.current;
-            if (!dropArea.Contains(currentEvent.mousePosition) ||
+            if (isReorderDrag ||
+                !dropArea.Contains(currentEvent.mousePosition) ||
                 (currentEvent.type != EventType.DragUpdated && currentEvent.type != EventType.DragPerform))
             {
                 return;
@@ -1167,21 +1300,47 @@ namespace SleepyCobalt.Tools.TextureTools
         private bool DrawTextureCategoryCard(
             TextureCategoryProjectSettings settings,
             TextureCategoryRecord category,
-            TextureCategoryResolvedRecord resolved)
+            TextureCategoryResolvedRecord resolved,
+            int categoryIndex,
+            out Rect cardRect)
         {
+            Rect cardStartRect = GUILayoutUtility.GetRect(0f, 0f, GUILayout.ExpandWidth(true));
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.BeginHorizontal();
 
             string title = string.IsNullOrWhiteSpace(category.name) ? "未命名分组" : category.name.Trim();
-            bool expanded = EditorGUILayout.Foldout(category.expanded, title, true, EditorStyles.foldoutHeader);
+            Rect headerRect = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight);
+            const float handleWidth = 20f;
+            const float deleteWidth = 52f;
+            const float spacing = 4f;
+            Rect handleRect = new Rect(headerRect.x, headerRect.y, handleWidth, headerRect.height);
+            Rect deleteRect = new Rect(
+                headerRect.xMax - deleteWidth,
+                headerRect.y,
+                deleteWidth,
+                headerRect.height);
+            Rect foldoutRect = new Rect(
+                handleRect.xMax + spacing,
+                headerRect.y,
+                Mathf.Max(1f, deleteRect.x - handleRect.xMax - spacing * 2f),
+                headerRect.height);
+
+            GUI.Label(handleRect, "≡", EditorStyles.miniLabel);
+            EditorGUIUtility.AddCursorRect(handleRect, MouseCursor.Pan);
+            HandleTextureCategoryReorderHandle(category, categoryIndex, handleRect);
+
+            bool expanded = EditorGUI.Foldout(
+                foldoutRect,
+                category.expanded,
+                new GUIContent(title),
+                true,
+                EditorStyles.foldoutHeader);
             if (expanded != category.expanded)
             {
                 category.expanded = expanded;
                 settings.SaveSettings();
             }
 
-            bool deleteRequested = GUILayout.Button("删除", GUILayout.Width(52f));
-            EditorGUILayout.EndHorizontal();
+            bool deleteRequested = GUI.Button(deleteRect, "删除");
 
             if (deleteRequested && EditorUtility.DisplayDialog(
                     "删除贴图分组",
@@ -1190,12 +1349,16 @@ namespace SleepyCobalt.Tools.TextureTools
                     "取消"))
             {
                 EditorGUILayout.EndVertical();
+                cardRect = new Rect();
                 return true;
             }
 
             if (!category.expanded)
             {
                 EditorGUILayout.EndVertical();
+                Rect collapsedEndRect = GUILayoutUtility.GetRect(0f, 0f, GUILayout.ExpandWidth(true));
+                cardRect = CreateTextureCategoryCardRect(cardStartRect, collapsedEndRect);
+                EditorGUILayout.Space(6f);
                 return false;
             }
 
@@ -1235,8 +1398,220 @@ namespace SleepyCobalt.Tools.TextureTools
             }
 
             EditorGUILayout.EndVertical();
+            Rect cardEndRect = GUILayoutUtility.GetRect(0f, 0f, GUILayout.ExpandWidth(true));
+            cardRect = CreateTextureCategoryCardRect(cardStartRect, cardEndRect);
             EditorGUILayout.Space(6f);
             return false;
+        }
+
+        private static Rect CreateTextureCategoryCardRect(Rect startRect, Rect endRect)
+        {
+            return new Rect(
+                startRect.x,
+                startRect.y,
+                Mathf.Max(1f, endRect.width),
+                Mathf.Max(0f, endRect.y - startRect.y));
+        }
+
+        private void HandleTextureCategoryReorderHandle(
+            TextureCategoryRecord category,
+            int categoryIndex,
+            Rect handleRect)
+        {
+            int controlId = GUIUtility.GetControlID(FocusType.Passive);
+            Event currentEvent = Event.current;
+            bool isPendingHandle = string.Equals(
+                pendingTextureCategoryReorderId,
+                category == null ? string.Empty : category.id,
+                StringComparison.Ordinal);
+
+            if (currentEvent.type == EventType.MouseDown &&
+                currentEvent.button == 0 &&
+                handleRect.Contains(currentEvent.mousePosition))
+            {
+                pendingTextureCategoryReorderId = category == null ? string.Empty : category.id;
+                pendingTextureCategoryReorderIndex = categoryIndex;
+                GUIUtility.hotControl = controlId;
+                currentEvent.Use();
+                return;
+            }
+
+            if (currentEvent.type == EventType.MouseDrag &&
+                GUIUtility.hotControl == controlId &&
+                isPendingHandle)
+            {
+                BeginTextureCategoryReorderDrag(pendingTextureCategoryReorderId, pendingTextureCategoryReorderIndex);
+                GUIUtility.hotControl = 0;
+                currentEvent.Use();
+                return;
+            }
+
+            if (currentEvent.type == EventType.MouseUp &&
+                GUIUtility.hotControl == controlId)
+            {
+                GUIUtility.hotControl = 0;
+                pendingTextureCategoryReorderId = null;
+                pendingTextureCategoryReorderIndex = -1;
+                currentEvent.Use();
+            }
+        }
+
+        private static void BeginTextureCategoryReorderDrag(string categoryId, int categoryIndex)
+        {
+            if (string.IsNullOrEmpty(categoryId) || categoryIndex < 0)
+                return;
+
+            DragAndDrop.PrepareStartDrag();
+            DragAndDrop.SetGenericData(TextureCategoryReorderKey, categoryId);
+            DragAndDrop.StartDrag("调整贴图分组顺序");
+        }
+
+        private static bool TryGetTextureCategoryReorderId(out string categoryId)
+        {
+            categoryId = DragAndDrop.GetGenericData(TextureCategoryReorderKey) as string;
+            return !string.IsNullOrEmpty(categoryId);
+        }
+
+        private bool IsTextureCategoryReorderDrag()
+        {
+            return TryGetTextureCategoryReorderId(out _);
+        }
+
+        private void HandleTextureCategoryReorderDrag(TextureCategoryProjectSettings settings)
+        {
+            Event currentEvent = Event.current;
+            bool hasPendingHandle = !string.IsNullOrEmpty(pendingTextureCategoryReorderId);
+            if (currentEvent.type == EventType.DragExited)
+            {
+                if (TryGetTextureCategoryReorderId(out _) || hasPendingHandle)
+                {
+                    ClearTextureCategoryReorderState();
+                    currentEvent.Use();
+                    Repaint();
+                }
+
+                return;
+            }
+
+            if (!TryGetTextureCategoryReorderId(out string categoryId))
+                return;
+
+            int sourceIndex = FindTextureCategoryIndex(settings.categories, categoryId);
+            if (sourceIndex < 0)
+            {
+                ClearTextureCategoryReorderState();
+                return;
+            }
+
+            if (currentEvent.type == EventType.DragUpdated)
+            {
+                textureCategoryReorderDropIndex = CalculateTextureCategoryReorderDropIndex(
+                    settings.categories.Count,
+                    currentEvent.mousePosition);
+                DragAndDrop.visualMode = DragAndDropVisualMode.Move;
+                currentEvent.Use();
+                Repaint();
+            }
+            else if (currentEvent.type == EventType.DragPerform)
+            {
+                DragAndDrop.visualMode = DragAndDropVisualMode.Move;
+                DragAndDrop.AcceptDrag();
+                CompleteTextureCategoryReorder(settings, categoryId, sourceIndex);
+                currentEvent.Use();
+            }
+        }
+
+        private int CalculateTextureCategoryReorderDropIndex(int categoryCount, Vector2 mousePosition)
+        {
+            for (int index = 0; index < textureCategoryCardLayouts.Count; index++)
+            {
+                if (mousePosition.y < textureCategoryCardLayouts[index].cardRect.center.y)
+                    return index;
+            }
+
+            return categoryCount;
+        }
+
+        private static int FindTextureCategoryIndex(
+            IList<TextureCategoryRecord> categories,
+            string categoryId)
+        {
+            if (categories == null || string.IsNullOrEmpty(categoryId))
+                return -1;
+
+            for (int index = 0; index < categories.Count; index++)
+            {
+                if (categories[index] != null &&
+                    string.Equals(categories[index].id, categoryId, StringComparison.Ordinal))
+                {
+                    return index;
+                }
+            }
+
+            return -1;
+        }
+
+        private void CompleteTextureCategoryReorder(
+            TextureCategoryProjectSettings settings,
+            string categoryId,
+            int sourceIndex)
+        {
+            int insertIndex = Mathf.Clamp(
+                textureCategoryReorderDropIndex,
+                0,
+                settings.categories.Count);
+            if (sourceIndex < insertIndex)
+                insertIndex--;
+
+            if (insertIndex != sourceIndex && insertIndex >= 0 && insertIndex < settings.categories.Count)
+            {
+                TextureCategoryRecord category = settings.categories[sourceIndex];
+                if (category != null && string.Equals(category.id, categoryId, StringComparison.Ordinal))
+                {
+                    settings.categories.RemoveAt(sourceIndex);
+                    settings.categories.Insert(insertIndex, category);
+                    settings.SaveSettings();
+                    MarkTextureCategoryResolutionDirty();
+                }
+            }
+
+            ClearTextureCategoryReorderState();
+            Repaint();
+        }
+
+        private void ClearTextureCategoryReorderState()
+        {
+            DragAndDrop.SetGenericData(TextureCategoryReorderKey, null);
+            pendingTextureCategoryReorderId = null;
+            pendingTextureCategoryReorderIndex = -1;
+            textureCategoryReorderDropIndex = -1;
+        }
+
+        private void DrawTextureCategoryReorderInsertionLine()
+        {
+            if (Event.current.type != EventType.Repaint ||
+                !IsTextureCategoryReorderDrag() ||
+                textureCategoryReorderDropIndex < 0 ||
+                textureCategoryCardLayouts.Count == 0)
+            {
+                return;
+            }
+
+            Rect targetRect;
+            if (textureCategoryReorderDropIndex < textureCategoryCardLayouts.Count)
+            {
+                targetRect = textureCategoryCardLayouts[textureCategoryReorderDropIndex].cardRect;
+                targetRect.y -= 3f;
+            }
+            else
+            {
+                targetRect = textureCategoryCardLayouts[textureCategoryCardLayouts.Count - 1].cardRect;
+                targetRect.y = targetRect.yMax + 3f;
+            }
+
+            EditorGUI.DrawRect(
+                new Rect(targetRect.x, targetRect.y, targetRect.width, 2f),
+                new Color(0.24f, 0.58f, 0.95f, 0.95f));
         }
 
         private void DrawTextureCategoryPresetField(
@@ -1353,11 +1728,13 @@ namespace SleepyCobalt.Tools.TextureTools
             TextureCategoryProjectSettings settings,
             TextureCategoryRecord category)
         {
+            bool isReorderDrag = IsTextureCategoryReorderDrag();
             Rect dropArea = GUILayoutUtility.GetRect(0f, 54f, GUILayout.ExpandWidth(true));
             GUI.Box(dropArea, "从 Project 拖入图片或文件夹", EditorStyles.helpBox);
 
             Event currentEvent = Event.current;
-            if (!dropArea.Contains(currentEvent.mousePosition) ||
+            if (isReorderDrag ||
+                !dropArea.Contains(currentEvent.mousePosition) ||
                 (currentEvent.type != EventType.DragUpdated && currentEvent.type != EventType.DragPerform))
             {
                 return;
@@ -1593,13 +1970,29 @@ namespace SleepyCobalt.Tools.TextureTools
             TextureCategoryQuickSearch quickSearch = TextureCategoryQuickSearch.None;
             if (category != null && !string.IsNullOrEmpty(category.id))
                 textureCategoryMemberQuickSearches.TryGetValue(category.id, out quickSearch);
-            if (GUILayout.Button(GetQuickSearchButtonLabel(quickSearch), GUILayout.Width(88f)))
+            int maxTextureSizeFilter = NoMaxTextureSizeFilter;
+            if (category != null && !string.IsNullOrEmpty(category.id))
+            {
+                textureCategoryMemberMaxTextureSizeFilters.TryGetValue(
+                    category.id,
+                    out maxTextureSizeFilter);
+            }
+
+            if (GUILayout.Button(
+                    GetQuickSearchButtonLabel(quickSearch, maxTextureSizeFilter),
+                    GUILayout.Width(88f)))
             {
                 TextureCategoryRecord targetCategory = category;
-                ShowQuickSearchMenu(quickSearch, selected =>
+                ShowQuickSearchMenu(
+                    quickSearch,
+                    maxTextureSizeFilter,
+                    (selected, selectedMaxTextureSize) =>
                 {
                     if (targetCategory != null && !string.IsNullOrEmpty(targetCategory.id))
+                    {
                         textureCategoryMemberQuickSearches[targetCategory.id] = selected;
+                        textureCategoryMemberMaxTextureSizeFilters[targetCategory.id] = selectedMaxTextureSize;
+                    }
                     Repaint();
                 });
             }
